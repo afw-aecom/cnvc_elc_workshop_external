@@ -1,0 +1,490 @@
+---
+title: "CNVC ELC Pre-Workshop Session 3"
+author: "Aaron Wells"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. 
+
+Run this code block first to load the R libraries necessary for this tutorial.
+```{r echo=TRUE, results='hide', warning = FALSE, message = FALSE}
+# Libraries
+library(labdsv)
+library(tidyverse)
+library(dplyr)
+library(vegan)
+library(stats) 
+```
+
+## Read the vegetation data into R and convert to wide format
+First, we'll read the vegetation data into R in long format and convert it to wide format (i.e., plots as rows species as columns). The data we'll be using for this exercise if from the Saskatchewan Forest Ecosystem Classification (FEC) data set with tree canopy cover data aggregated to species.
+
+You can use your own vegetation data set if you like. First, save the data in the R working directory on your computer in CSV format, and 2) change the csv file name to match the name of the file with your data. The data should have three columns, in this order: plot number, plant species names, and abundance. If you use your own data you'll need to update column names throughout to match the columns names in your data set.
+
+```{r echo=TRUE, results='hide'}
+# read in the vegetation data
+fec_veg_nl <- read.csv("saskatchewan_fec_veg_data_agg_layer.csv",sep = ",")
+
+# check the dimensions (output = row, columns)
+dim(fec_veg_nl)
+
+# convert the vegetation data object to wide format (plot = rows, species = columns)
+fec_veg_nl_mat <- matrify(fec_veg_nl)
+
+dim(fec_veg_nl_mat)
+```
+
+## Read the environment data into R
+Next, we'll read in the environment data that corresponds to the plots in the vegetation dataframe. We'll assign the plot numbers as the row names, sort the data frame alphabetically by plot number (to ensure it's sorted the same as the vegetation data frame), and then confirm the two data frames are the same length and in the same order.
+
+You can use your own environment data set if you like. First, save the data in the R working directory on your computer in CSV format, and 2) change the csv file name to match the name of the file with your data. The environment data attributes can be different than are used in this tutorial; however, plot number is a required column and your data set should have several continuous data attributes (e.g., elevation) and several categorical attributes (e.g., soil moisture class).  
+
+```{r echo=TRUE, results='hide'}
+fec_env <- read.csv("saskatchewan_fec_env_data_agg_layer.csv",sep = ",")
+
+# confirm that the number of rows is the same as the wide format vegetation data
+dim(fec_env)
+
+# assign row names to the plot number column
+row.names(fec_env)<-fec_env$plotnumber
+row.names(fec_env)
+
+# sort the environment dataframe by row.names to match the vegetation data frame
+fec_env <- fec_env[order(fec_env$plotnumber), ]
+
+# confirm the veg and environment data frames are sorted the same (alphabetically by plot number)
+
+identical(row.names(fec_env),row.names(fec_veg_nl_mat))
+
+# review and troubleshoot if the vegetation and environment dataframe orders don't match
+cbind(row.names(fec_env),row.names(fec_veg_nl_mat))[1:500,]
+
+```
+
+### Checking for missing data
+
+```{r echo=TRUE, results='hide'}
+# Adjust maximum number of lines to print
+options(max.print=100000)
+
+# Check for NAs for single column
+na_count <- table(is.na(fec_env$depth_of_organic_matter_cm))
+na_count
+
+# Check for other no data values, e.g., 999
+table(fec_env$depth_of_organic_matter_cm == 999)
+
+## Assigning NA to a specific value for individual columns
+fec_env$depth_of_organic_matter_cm[fec_env$depth_of_organic_matter_cm == 999] <- NA
+
+## Assigning specific values to NA for all columns in a data frame
+fec_env[fec_env==999]<-NA
+
+## Convert empty strings to NA
+fec_env[fec_env==""] = NA
+
+## Null values to NA
+fec_env[is_empty(fec_env)] = NA
+
+# Check for NAs in all columns in a data frame
+
+na_counts_dplyr <- fec_env %>%
+  summarise_all(~ sum(is.na(.)))
+
+print(na_counts_dplyr)
+```
+
+## Vegetation Data Exploration
+
+### Species Occurrence Patterns
+
+The following code uses the *abuocc* function from the labdsv R package (Roberts 2023) and produces several plots displaying species occurrence patterns.
+
+```{r echo=TRUE, results='hide'}
+
+x11(pointsize=10) # opens a new graphics device
+fec_nl_abuocc <- abuocc(fec_veg_nl_mat,minabu=0,panel='all')
+
+```
+
+The first  shows the the number of samples each species occurs in on a log scale, sorted from maximum to minimum. The graph shows that most species are not common. The second plot displays the number of species in each sample plot (species richness) from highest to lowest. 
+
+The second graph shows that species richness by plot ranges from just under 50 to less than five, and that most plots have less than 20 species. 
+
+The third graph displays a scatter plot of mean abundance of each species and number of plots each species occurs in. This graph is interactive and you can choose to identify species by clicking on points on the graph. This graph shows that most species occur in few plots across a wide range of mean abundance values and that relatively few species occur in a moderate to high number of plots. Interactively clicking on the points reveals that the following species are common and have high mean abundance (points in the upper right corner of the graph): *Populus tremuloides*, *Picea mariana*, *Pinus banksiana*, *Betula papyrifera*, *Rhododendron groenlandicum*, *Vaccinium vitis-idaea*, *Cornus canadensis*, *Rosa acicularis*, *Linnaea borealis*, and *Maianthemum canadensis*.
+
+To stop identifying click on "Stop" in the upper left corner of the graphics window.
+
+The fourth plot displays the total abundance/sample as a function of the plot-level species richness. This plot shows that most plot have species richness less than approximately 20 and total abundance between 25 and 120. It may be of interest to the analyst to assess plots with very high richness and abundance, those with very low richness and abundance, and those with very low richness and very high abundance. This graph is also interactive and allows the analyst to identify plots by clicking on the points. 
+
+The R object created by the *abuocc* function includes two vectors: 1) spc.plt which contains species richness by plots, and 2) plt.spc which contains the list of species with a count of each.
+
+### Explore the vegetation data for specific plots identified in the abuocc exercise
+
+You may want to take some time to explore the vegetation data for specific plots identified in the above exercise.
+```{r echo=TRUE, results='hide'}
+# Example of a plot with very low species richness and very low total abundance
+fec_veg_nl %>% 
+  as_tibble() %>%
+        filter(plotnumber %in% c(126)) %>%
+          arrange(desc(cover_percent),analysis_name) %>%
+            print(n=50)
+```
+
+Plot 126 is in the ecosite Sand heather - floccose tansy sand dune (BS1). The raw plot data include Bromus ciliatus (10%), Unknown graminoid species (1.5%), and exposed mineral soil (87.5%). As per the workflow described in the first data cleaning session, abiotic ground cover and unknown species were removed for analysis, leaving one species. This is an example of the data cleaning step of identifying and possibly removing plots from analysis with less than a certain number of species as these often are outliers in vegetation community analyses.
+
+```{r echo=TRUE, results='hide'}
+# Example of a plot with high species richness and total abundance
+fec_veg_nl %>% 
+  as_tibble() %>%
+        filter(plotnumber %in% c(1848)) %>%
+          arrange(desc(cover_percent),analysis_name) %>%
+            print(n=50)
+
+```
+
+Plot 1848 is in the Trembling aspen - white birch / sarsaparilla (BP7) which is described by McLauglan et al (2010) as "among the most diverse ecosites in the Boreal Plain ecozone." 
+
+### Empirical Cumulative Density Functions (ECDF) Plot of Species Richness
+
+Empirical Cumulative Density Function plots display data points from lowest to highest against the percentiles of occurrence. We can use the spc.plt attribute of the *abuocc* object created above to calculate and plot the ECDF.
+
+```{r echo=TRUE, results='hide'}
+
+# Calculate ECDF
+veg_ecdf <- ecdf(fec_nl_abuocc$spc.plt)
+
+# Plot the ECDF
+x11()
+plot(veg_ecdf, main = "ECDF of Saskatchewan FEC Vegetation Data", xlab = "Vascular Species Richness", ylab = "Cumulative Proportion") 
+
+```
+
+The ECDF plot display species richness from lowest to highest against the proportion of plots. From the graph we see that 10% of plots have a species richness less than approximately five, 50% of plots have species richness less than approximately 12, 80% of plots have species richness less than 22, and only 5% of plots have a species richness greater than approximately 32. The ECDF plot tells us something about the gamma (landscape) diversity of the sample population captured by the dataset. Very low and very high species richness is rare, and most plots have low to moderate species richness.   
+
+### Species Accumulation Curves
+
+Species accumulation curves show how the number of species increases with increase sampling intensity and provide an estimate of the adequacy of the sampling effort for ecological classifications. 
+
+The following code calculates and plots a species accumulation curve for vascular plants from the Saskatchewan FEC data set and overlays confidence intervals as red lines above and below the curve. 
+```{r echo=TRUE, results='hide'}
+
+sac_fec <- specaccum(fec_veg_nl_mat)
+
+x11()
+plot(sac_fec, ci.type="line",  ylab = "Number of Species",main = "Species Accumulation Curve Saskatchewan FEC Vegetation Data", ci.col="red")
+
+# Additional options for displaying the confidence intervals
+plot(sac_fec, ci.type="bar", ci.col="blue") # bars
+plot(sac_fec, ci.type="polygon", ci.col="yellow") # polygon
+
+```
+
+The species accumulation curve shows a sharp rise in the number of species encountered indicating that many new species are being added with relatively little additional sampling effort. The sharp rise is followed by an asymptote, indicating that additional plots are not adding significantly to the gamma (landscape diversity). In addition, the confidence intervals are relatively narrow indicating relatively low variability in the results. The results indicate that the sampling effort was adequate for the Saskatchewan FEC data set.  
+
+Conversely, if we take a subset of approximately 50 plots representing five ecosites from the Saskatchewan FEC data set, we can see that the sharp rise and asymptote are lacking, indicating inadequate sampling effort.
+
+```{r echo=TRUE, results='hide'}
+
+# Subset environment data by selecting plots assigned to 4 ecosites
+fec_env_subset <- fec_env[fec_env$ecosite_title %in% c('Black spruce - white birch/feathermoss','Jack pine/bearberry/lichen','Trembling aspen - white spruce/western snowberry','White birch - black spruce/lingonberry','White spruce/crowberry/feathermoss'),]
+
+dim(fec_env_subset)
+
+# Subset vegetation data by selecting plots assigned to 4 ecosites
+fec_veg_nl_mat_subset <- fec_veg_nl_mat[fec_env$ecosite_title %in% c('Black spruce - white birch/feathermoss','Jack pine/bearberry/lichen','Trembling aspen - white spruce/western snowberry','White birch - black spruce/lingonberry','White spruce/crowberry/feathermoss'),]
+
+dim(fec_veg_nl_mat_subset)
+
+#remove species with zero occurrences in the vegetation data subset
+fec_veg_nl_mat_subset<-fec_veg_nl_mat_subset[,colSums(fec_veg_nl_mat_subset[])>0] 
+
+dim(fec_veg_nl_mat_subset)
+
+# Calculate and plot species accumulation curve for the subset of vegetation data
+sac_fec_subset <- specaccum(fec_veg_nl_mat_subset)
+
+x11()
+plot(sac_fec_subset, ci.type="line",  ylab = "Number of Species",main = "Species Accumulation Curve Saskatchewan FEC Vegetation \nData Subset", ci.col="red")
+
+```
+
+## Continuous Environment Data
+
+### Basic Summary Statistics
+
+The first step in exploratory analysis of environment data is often displaying summary statistics and plotting related visualizations of continuous environment data attributes to understand the distribution of each variable in the dataset and identify outliers. 
+
+```{r echo=TRUE, results='hide'}
+
+# Use the summarize function to display mean, min, max, and quantiles
+
+# Elevation
+summary(fec_env$elevation_m)
+
+# Organic matter depth
+summary(fec_env$depth_of_organic_matter_cm)
+
+# Percent coarse fragments in the soil
+summary(fec_env$cf_percent_120)
+
+```
+
+The results of the summarize function show the minimum, maximum, median, mean, and 25th and 75th quantiles of the data. The results also show the number of plots with missing data (NAs) for each attribute.
+
+### Plotting Sorted Environmental Variables
+
+A quick and easy way to visually assess continuous environmental variables is to plot the variable sorted from lowest to highest or vice versa. For instance, elevation.
+
+```{r echo=TRUE, results='hide'}
+plot(sort(fec_env$elevation_m),xlab = "Plots",ylab = "Elevation (m)",main = "Saskatchewan FEC Dataset Elevation (m)")
+```
+
+The data set represents a nearly continous gradient in elevation from approximately 200 m to just over 800 m with a small subset of plots at approximately 100 m. We can also see there is an obvious outlier with a value greater than 1,400 meters.
+
+#### List the outliers
+
+```{r echo=TRUE, results='hide'}
+
+row.names(fec_env)[fec_env$elevation_m>1200]
+
+```
+
+### Histograms
+
+Histograms are another quick way to evaluate the distribution of continuous environmental variables in a data set. For instance, percent coarse fragments in the soil and organic matter depth. 
+
+```{r echo=TRUE, results='hide', warning = FALSE}
+hist(fec_env$cf_percent_120, col='steelblue', main='Coarse Fragments (%)',xlab='Coarse Fragment (%)')
+
+hist(fec_env$depth_of_organic_matter_cm, col='brown', main='Depth of Organic Matter (cm)',xlab='Org. Matter Depth (cm)')
+
+```
+
+The histograms show that both variables are skewed and have many low values. Organic matter depth also shows a spike at the maximum value; presumably a standard maximum value was entered by organic matter depth exceeded a certain threshold or when the actual organic matter depth could not be measured as it exceeded the maximum depth the soil pit was excavated.
+
+Assessing histograms across categories of a categorical variable can also provide important insights into the data set. For instance, elevation across ecoregions.
+
+```{r echo=TRUE, results='hide', warning = FALSE}
+# Plot histograms of elevation by ecoregion using ggplot2
+
+height <- 4
+width <- 6
+resize <- 1.5
+hghts <- c(3, 5)
+
+q <- ggplot(fec_env, aes(x=elevation_m)) +
+    geom_histogram( binwidth=100, fill="#69b3a2", color="#e9ecef", alpha=0.9) +
+    ggtitle("Saskatchewan FEC Dataset Elevation Histograms by Ecoregion") +
+    facet_grid( ~ ecoregion_title) +
+    theme(plot.title = element_text(size=15))+ 
+  xlab("Elevation (m)") +
+  ylab("Count of Plots")
+
+png(filename = "Fig_1_elev_hist_by_ecoregion.png", width=width*resize, height=height*resize, units="in", res=600)
+
+print(q)
+dev.off()
+```
+
+## Boxplots
+
+Boxplots are another useful way to visualize the distribution of continuous environmental variables and identify outliers. For instance, depth of organic matter by ecosite for the subset of Saskatchewan FEC data that we created above.
+
+```{r echo=TRUE, results='hide',warning = FALSE}
+
+
+p<-ggplot(fec_env_subset, aes(x=ecosite, y=depth_of_organic_matter_cm, fill=ecosite_title)) +
+  geom_boxplot(position=position_dodge(1),outlier.shape = 18,outlier.size = 2.5) + # plot the box
+    scale_fill_manual(values = c("#E69F00" ,"#56B4E9", "#009E73", "#F0E442", "#0072B2"),name = "Boxplots by\nEcosite") + # define the fill colors to symbolize ecosites and add the legend with title
+  geom_point(position = position_jitterdodge(jitter.width = 0.15)) # plot the data points to show the distribution and density
+
+pboxorg <- p + 
+  xlab("Ecosite Code") + ylab("Depth Org. Matter (cm)")
+
+png("Fig_2_depth_org_by_ecosite.png", height=2000, width=2000,res=300)
+pboxorg
+dev.off()
+```
+
+The boxplot shows the range of values by ecosite (min, max, median, 25th, 75th percentiles) and outliers. The points show the actual distribution of depth of organic matter values to visually evaluate the distribution and density of the points.
+
+Returning back to elevation, we can plot the range of elevation values by ecoregion using boxplots to show a different view of the distribution of elevation for the entire Saskatchewan FEC dataset.
+
+```{r echo=TRUE, results='hide',warning = FALSE}
+
+p<-ggplot(fec_env, aes(x=ecoregion_title, y=elevation_m, fill=ecoregion_title)) +
+  geom_boxplot(position=position_dodge(1),outlier.shape = 18,outlier.size = 2.5) +
+    scale_fill_manual(values = c("#0AB45A",  "#AA0A3C","#D55E00",  "#0072B2"),name = "Boxplots by\nEcoregion") +
+  geom_point(position = position_jitterdodge(jitter.width = 0.15))
+
+pboxhght <- p + 
+  xlab("Ecoregion") + ylab("Elevation (m)")
+
+png("Fig_3_Boxplot_Elevation_by_ecoregion.png", height=2000, width=2000,res=300)
+pboxhght
+dev.off()
+```
+
+We can see the same outlier point as we noted in the plots of sorted elevation. Overlaying the points on the boxplots also shows the distribution and density of the points across ecoregions. For instance, for the Prairie ecoregion we see two clusters of points near the lower and upper ends of the distribution. We also see that the median is near the bottom of the distribution indicating that the range of sampled elevations in the prairies is split and skewed towards lower elevations. Another example is the Taiga Sheild ecoregion which has density of points corresponding to the central range of the distribution and a long tail at the bottom of the distribution.
+
+## Violin plots 
+
+Violin plots, so named from the plot's purported resemblance to a violin, are like boxplots but also show the density of sampling points across values. For instance, elevation by ecoregion.
+
+```{r echo=TRUE, results='hide',warning = FALSE}
+
+p <- ggplot(fec_env, aes(x=ecoregion_title, y=elevation_m)) +
+  geom_violin(trim=FALSE, fill='#A4A4A4', color="darkred")+
+  #geom_boxplot(width=0.1) + 
+  theme_minimal()
+
+pviohght <- p + 
+  xlab("Ecoregion") + ylab("Elevation (m)")
+
+
+png("Fig_4_Violin_Elevation_by_ecoregion.png", height=2000, width=2000,res=300)
+pviohght
+dev.off()
+```
+
+The violin plots show the distribution of elevations by ecoregion and also more clearly show the density of the points across values. The split in the distribution of elevation in the Prairie ecoregion is displayed a long narrow shape with a truncated middle section, while the high density of points corresponding to the central range of the distribution and a long tail at the bottom of the distribution in the Taiga Shield ecoregion are displayed in the shape of a raptor in flight. By comparing the elevation by ecoregion histograms, box plots, and violin plots one can gain insights into the distribution of continuous environmental variables, including identifying outliers and evaluating if the dataset is skewed and if the data set adequately represents the range of variation across categorical attributes in the study area (e.g., proportion of the study area at certain elevations calculated in GIS versus what was actually sampled).
+
+### Correlation Analysis
+A statistical measure that indicates how strongly and which direction (positive or negative) two variables are related. Correlation between attributes has implications for the interpretation of analysis results. Correlation coefficients range between -1 (strong negative correlation) and 1 (strong positive correlation), with zero indicating no correlation. One example is organic matter depth and percent coarse fragment content. 
+
+```{r echo=TRUE, results='hide',warning = FALSE}
+
+cor.test(fec_env$cf_percent_120,fec_env$depth_of_organic_matter_cm)
+
+# Scatter plot with a regression line
+ggplot(fec_env, aes(x = cf_percent_120, y = depth_of_organic_matter_cm)) +
+  geom_point(color = "blue", size = 2) +
+  geom_smooth(method = "lm", color = "red", se = FALSE) +
+  labs(title = "Scatter Plot with Pearson Correlation",
+       x = "Coarse Fragments (%)", y = "Depth of Organic Matter (cm)") +
+  theme_minimal()
+
+```
+
+Organic matter depth and percent coarse fragment content are significantly negatively correlated (-0.24), although the correlation is weak, i.e., deeper organic matter corresponds to fewer coarse fragments. For illustrative purposes we can assessing the scatter plot with a linear regression line added shows the relationship but bear in mind that neither variable is normally distributed (based on the histograms plotted above) and the relationship between the two is weak.
+
+## Categorical Environment Data
+
+Exploratory analyses for categorical variables include assessing frequency across classes, cross-tabulating, and assessing the range of continous variables across categories (e.g., elevation by ecoregion, above).
+
+### Frequency
+A very quick and simple way to assess categorical data attributes is to assess the frequency of each category in the dataset. For instance, slope position from the Saskatchewan FEC data set.
+```{r echo=TRUE, results='hide'}
+
+# Check for missing data
+table(is.na(fec_env$slope_position_title))
+
+# Create a table showing the number of plots in each slope position class
+table(fec_env$slope_position_title)
+
+```
+
+Reviewing the table we can see that the category with the greatest number of plots is Level, followed by Upper Slope and Mid Slope. The slope positions with the fewest plots are Toe Slope and Depression. 
+
+To view the frequency as a percentage of the total plots use the following code:
+```{r echo=TRUE, results='hide'}
+slope_percent<-table(fec_env$slope_position_title)/dim(fec_env)[1]*100
+round(slope_percent,digits = 0)
+
+```
+
+### Cross-tabulation
+It can also be insightful to cross-tabulate two categorical variables to assess the correspondence between them in the data. One can generally assess the distribution of the combination of classes and also look for combinations of categories that may not make sense and review those in more detail in the database. For instance, slope position and soil moisture. 
+
+```{r echo=TRUE, results='hide'}
+# Step 1: convert each attribute to a factor and specify the order of classes
+fec_env$slope_position_title <- factor(fec_env$slope_position_title, levels = c("Crest","Upper Slope","Mid Slope","Lower Slope","Toe Slope","Level","Depression"))
+
+fec_env$soil_moisture_class_title <- factor(fec_env$soil_moisture_class_title, levels = c("Dry","Moderately Dry","Very Fresh","Moderately Fresh","Fresh","Moist","Moderately Moist","Very Moist","Moderately Wet","Wet","Very Wet"))
+
+# Create the cross-tabulation
+
+table(fec_env$slope_position_title,fec_env$soil_moisture_class_title)
+
+```
+
+The cross-tabulation table shows the count of soil moisture classes within each slope position category. The results generally make sense with the dry soil moisture classes occurring on crests and upper and mid slopes, and moist and wet moisture classes occurring on level areas and in depressions. However, there are many soil moisture categories to assess and aggregated the classes might make it easier to assess the distribution of the data. Use the following code to aggregate soil moisture classes and recreate the cross-tabulation table.
+
+```{r echo=TRUE, results='hide'}
+# create a new environment dataframe that is a copy of the original and add an aggregated soil moisture column
+fec_env_m <- fec_env %>%
+                   as_tibble() %>%
+                    mutate(soil_moisture_agg = soil_moisture_class_title)
+
+# Aggregating soil moisture classes in the new column
+fec_env_m$soil_moisture_agg[fec_env_m$soil_moisture_class_title %in% c("Dry","Moderately Dry")]<- "Dry"
+fec_env_m$soil_moisture_agg[fec_env_m$soil_moisture_class_title %in% c("Very Fresh", "Moderately Fresh","Fresh")]<- "Fresh"
+fec_env_m$soil_moisture_agg[fec_env_m$soil_moisture_class_title %in% c("Moist", "Moderately Moist","Very Moist")]<- "Moist"
+fec_env_m$soil_moisture_agg[fec_env_m$soil_moisture_class_title %in% c("Moderately Wet","Wet","Very Wet")]<- "Wet"
+
+# Drop unused factors in the aggregated column
+fec_env_m$soil_moisture_agg<-droplevels(fec_env_m$soil_moisture_agg)
+
+# Create the aggregated cross-tabulation table
+table(fec_env_m$slope_position_title,fec_env_m$soil_moisture_agg)
+```
+
+### Stacked barcharts - Visualize quantities by category and subcategory
+
+Stacked bar charts are way to visualize quantities by category and subcategory. Following from the example above we can visualize the frequency of ech slope position in the data set and within each slope position we can see the frequency of soil moisture classes. The stacked bar charts also automatically plot the frequency of missing data values.
+
+### Stacked bar chart
+
+```{r echo=TRUE, results='hide',warning = FALSE,message = FALSE}
+
+# calculate the frequency of soil moisture classes by slope position using group_by
+slope_pos_stacked <- fec_env_m %>%
+                      group_by(slope_position_title,soil_moisture_agg) %>%
+                        summarise(soil_moist_count = n())
+
+# create the stacked barchart figure
+height <- 4
+width <- 6
+resize <- 1.5
+hghts <- c(3, 5)
+
+q <- ggplot(data=slope_pos_stacked,
+            aes(x=slope_position_title, y=soil_moist_count,
+  fill=soil_moisture_agg)) + #, group = scientific_name
+  geom_bar(stat="identity") +
+  scale_x_discrete(name="Slope Position") +
+  scale_y_continuous(name="Count") +
+  theme_bw() + scale_fill_manual(values=c("#F0E442","#E69F00","#009E73","#0072B2"), name="Size Class") 
+q <- q + theme(
+                axis.text.x = element_text(angle = 60, hjust = 1,size = 10,color = "black"),
+                axis.text.y = element_text(size = 12),
+                axis.title.x = element_blank(),
+                axis.title.y = element_text(size = 15),
+                legend.title = element_text(size = 15, face = "bold"),
+                legend.text = element_text(size = 12)
+
+               )
+
+png(filename = "Fig_5_slope_pos_moisture_stacked_barchart.png", width=width*resize, height=height*resize, units="in", res=600)
+
+print(q)
+dev.off()
+
+```
+
+## Literature Cited
+
+McLaughlan, M.S.; Wright, R.A.; Jiricka, R.D. 2010. Field guide to the ecosites of Saskatchewan’s provincial forests. Saskatchewan Ministry of Environment, Forest Service. Prince Albert, Saskatchewan. 343 pp.
+
+Roberts, D.W. 2023. labdsv: Ordination and Multivariate Analysis for Ecology . R package version 2.1-0. 
+Available:https://cran.r-project.org/web/packages/labdsv/index.html  (accessed January 31, 2025)
