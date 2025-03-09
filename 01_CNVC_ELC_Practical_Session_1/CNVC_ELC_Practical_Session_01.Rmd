@@ -1,0 +1,1318 @@
+---
+title: "CNVC_ELC_Practical_Session_1"
+author: "Aaron Wells"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+The purpose of this first practical session is introduce the a number of multivariate statistical analyses that are used in ecosystem classification, including ordination, gradient analysis, cluster analysis, and indicator species analysis. In addition, this session will introduce techniques to quantitatively compare the results of these analyses to select the best output to use to support the ecosystem classification. We will use the Saskatchewan forest ecosystem classification data set with only the forest and woodland plots. In this session, focus on more the statistical analysis techniques that being introduced and less on the overall data set being used. In the second session we'll run through a typical analysis cycle from the bottom up using the Canadian prairie data set.
+
+First, copy the libraries and paste them into the console and click return. This will load the R libraries necessary for this session.
+### List of libraries for workshop
+```{r}
+library(dplyr)
+library(labdsv)
+library(vegan)
+library(cluster)
+library(optpart)
+library(rgl)
+library(vegan3d)
+library(vegclust)
+library(indicspecies)
+library(clValid)
+library(gt)
+
+```
+
+# Custom Functions
+
+## Function 1: pam.select
+
+Next, copy to the console and run the next three R functions.
+
+```{r}
+pam.select<-function (dist, k) 
+{
+    library(cluster)
+    tmp.clus <- c(2:k)
+    tmp.width <- rep(0, length = k - 1)
+    for (i in 1:k - 1) {
+        tmp.pam <- pam(dist, i + 1)
+        tmp.width[i] <- tmp.pam$silinfo$avg.width
+    }
+    output.tmp <- as.data.frame(cbind(tmp.clus, tmp.width))
+    names(output.tmp) <- c("numclus", "avg.width")
+    plot(output.tmp[, 1], output.tmp[, 2], xlab = "Number of Clusters", 
+        ylab = "Average Silhouette Width", main = "Average Silhouette Width by Number of Clusters")
+    abline(v = output.tmp$numclus[output.tmp$avg.width == max(output.tmp$avg.width)], 
+        col = 2)
+    output.tmp[order(output.tmp[, 2], decreasing = TRUE), ]
+}
+```
+
+## Function 2: identify.rgl
+
+This function allows for identification of points within a dynamic 3-D ordination diagram. The function can be called to identify any data feature associated with the point that exists in an R object related to the given point, e.g., plot_id. The inputs to the function include the variable of interest to be identified, a nmds points object, and the ordination dimensions of interest.
+
+```{r}
+identify.rgl<-function(env_var,ord,dim1,dim2,dim3)
+{
+tmp<-select3d(button="left")
+tmp.keep<-tmp(ord[,dim1],ord[,dim2],ord[,dim3])
+env_var[tmp.keep=="TRUE"]
+}
+```
+
+## Function 3: const_abund
+veg = long format veg matrix
+pltid = plot id column name
+plnt = plant species name column
+cov = abundance column
+clusvec = clustering dataframe
+clusnum = clustering number of interest
+covthresh = minimum average cover to display
+const_thresh = minimum constancy to display
+
+```{r}
+
+const_abund<-function (veg,clusvec,clusnum,const_thresh=0,cov_thresh=0) 
+{
+  library(tidyverse)
+  library(dplyr)
+  library(labdsv)
+  
+  veg_clus <- veg[clusvec == clusnum,]
+  veg_clus_long <- dematrify(veg_clus)
+  
+  clus_summ <- veg_clus_long %>% 
+    as_tibble() %>%
+      group_by(species) %>%
+        summarize(mean_abundance = mean(abundance, na.rm = TRUE),
+          stdev = sd(abundance, na.rm = TRUE),
+          min_abundance = min(abundance, na.rm = TRUE),
+          max_abundance = max(abundance, na.rm = TRUE),
+          median_abundance=quantile(abundance,probs=0.5),
+          spp_count = n()) 
+
+  clus_count <- clusvec %>%
+    as_tibble() %>%
+      count(value)
+  
+  constancy_percent <- (clus_summ$spp_count/clus_count$n[clus_count$value==clusnum])*100
+  
+  cat("Constancy & Abundance Metrics for Cluster ",clusnum, "\n")
+  
+  clus_summ %>%
+    add_column(constancy_percent) %>%
+      filter(constancy_percent>=const_thresh) %>%
+        filter(mean_abundance>=cov_thresh) %>%
+            arrange(-spp_count, -mean_abundance,species) %>%
+              print(n=10000)
+}
+
+```
+
+### Read in long format vegetation data
+```{r}
+
+fec_vegfor <- read.csv("fec_vegfor.csv",sep = ",")
+
+dim(fec_vegfor)
+fec_vegfor[1:10,]
+```
+
+Create a lifeform x species matrix to use later in constancy/cover tables
+```{r}
+
+lifeform_mat <- fec_vegfor %>%
+                    tibble() %>%
+                  dplyr::select(analysis_name_w_layer,physiog_agg) %>%
+                    distinct(analysis_name_w_layer,physiog_agg) 
+dim(lifeform_mat)
+lifeform_mat
+```
+
+Create wide format veg data (plots as rows, species as columns)
+```{r}
+
+fec_vegfor_mat <-matrify(fec_vegfor[,c(1,4,5)])
+
+dim(fec_vegfor_mat)
+
+fec_vegfor_mat[1:10,1:20]
+```
+
+Calculate the number of plots each species occurs in.
+```{r}
+x11(pointsize=10) # opens a new graphics device
+
+# Use the abuocc function to calculate species richness by plot and the number of plots each species occurs in
+fec_vegfor_abuocc <- abuocc(fec_vegfor_mat,minabu=0,panel='all')
+
+attributes(fec_vegfor_abuocc)
+
+fec_vegfor_abuocc$spc.plt[1:10] # species richness by plot
+fec_vegfor_abuocc$plt.spc[1:10] # number of plots each species occurs in
+fec_vegfor_abuocc$mean[1:10] # mean abundance of each species across all plots
+```
+
+In addition to the interactive plots, the **abuocc** function provides three vectors, a species richness by plot vector (**fec_vegfor_abuocc$spc.plt**), a vector containing the number of plots each species occurs in (**fec_vegfor_abuocc$plt.spc**), and a vector containing the mean abundance of each species across all plots (**fec_vegfor_abuocc$mean**).
+
+
+```{r}
+# calculate 1% of total number of plots  - rare taxa in this dataset
+(dim(fec_vegfor_mat)[1])*0.01
+
+# remove rare taxa (i.e., taxa that are in <1% of all plots)
+fec_vegfor_mat_lt1 <- fec_vegfor_mat[,fec_vegfor_abuocc$plt.spc>13]  
+dim(fec_vegfor_mat_lt1)
+
+```
+
+A more heavy handed approach to reducing the complexity of the data that is created by species with very low cover would be to use cover thresholds to remove species with low cover for the purpose of an analysis. This approach can be coupled with the above of removing "rare" species as well. The below could also be used to remove bryophytes and lichens for the purposes of analysis when combining data sets with various degrees of detail with regards to bryophytes and lichens. Each data set is different and may require a different approach to reducing complexity or standardizing the data. Also, the complete vegetation data set can be incorporated into the analysis at a later stage. Most importantly you document your decisions and the steps you take throughout the analysis process.
+
+```{r eval = FALSE}
+
+# Remove taxa from the long format vegetation data based on lifeform and cover thresholds
+fec_vegfor_filt <- fec_vegfor %>%
+                    filter(
+                      (physiog_agg %in% c('Mosses and Lichens') & cover_percent >= 5) |
+                        (physiog_agg %notin% c('Mosses and Lichens') & cover_percent >= 1)
+                    )
+# Create the wide format 
+fec_vegfor_filt_mat <-matrify(fec_vegfor_filt[,c(1,4,5)])
+
+# Calculate the number of plots each species occurs in
+fec_vegfor_filt_abuocc <- abuocc(fec_vegfor_filt_mat,minabu=0,panel='all')
+
+# Remove the "rare" taxa
+fec_vegfor_filt_mat_lt1 <- fec_vegfor_filt_mat[,fec_vegfor_filt_abuocc$plt.spc>13]  
+dim(fec_vegfor_filt_mat_lt1)
+
+```
+
+
+### Read in env data 
+```{r}
+
+fec_envfor <- read.csv("fec_envfor.csv",sep = ",")
+
+dim(fec_envfor)
+
+# assign row names to the plot number column
+row.names(fec_envfor)<-fec_envfor$plotnumber
+row.names(fec_envfor)
+
+# sort the environment dataframe by row.names to match the vegetation data frame
+fec_envfor <- fec_envfor[order(fec_envfor$plotnumber), ]
+
+# confirm the veg and environment data frames are sorted the same (alphabetically by plot number)
+
+identical(row.names(fec_envfor),row.names(fec_vegfor_mat_lt1))
+
+# only use the below to trouble shoot if the dataframe don't match
+cbind(row.names(fec_envfor),row.names(fec_vegfor_mat))[1:500,]
+
+## Assigning NA to a specific value for all columns in a data frame
+fec_envfor[fec_envfor==999]<-NA
+
+```
+
+Briefly describe dissimilarity/distance and provide list of options for metrics.
+
+### Dissimilarity and NMDS - raw abundance
+```{r}
+
+# Dissimilarity -- discuss other dissimilary/distance measures, perhaps use an example - Euclidean distance
+fec_vegfor_mat_lt1_dist_bc <- vegdist(fec_vegfor_mat_lt1,method="bray") 
+
+# raw cover
+fec_upfor_nmds_bc <-
+  metaMDS(fec_vegfor_mat_lt1_dist_bc,
+          distance = "bray",
+          k = 3,
+          maxit = 50, # number of iterations per attempt
+          trymax = 10, # number of attempts
+          wascores = TRUE)
+fec_upfor_nmds_bc
+
+# Stress Plot - shows the actual distances in coordinate space vs. dissimilarity
+x11()
+stressplot(fec_upfor_nmds_bc,main = "Stress Plot for Boreal and Temperate Forests\n Raw Abundance and Bray/Curtis") # Produces a Shepard's diagram
+```
+Stress refers to a measure of the goodness-of-fit or how well the non-metric multidimensional scaling (NMDS) ordination represents the original distances (or dissimilarities) between the samples (in this case plots) in a lower-dimensional space. Lower stress values indicate a better fit, meaning the ordination is a more accurate representation of the data. At the outset of analysis experiment with different abundance transformations (or no transformation) and dissimilarity metrics. Factors that affect stress include the number of dimensions selected, abundance transformation, dissimilarity/distance metric used, and the beta diversity of the dataset (higher diversity, higher stress). 
+
+ As a rule of thumb literature has identified the following cut-off values for stress-level:
+
+Higher than 0.2 is poor (risks for false interpretation).
+* 0.1 - 0.2 is fair (some distances can be misleading for interpretation).
+* 0.05 - 0.1 is good (can be confident in inferences from plot).
+* Less than 0.05 is excellent (this can be rare).
+
+Stress for the raw abundance was primarily ranged from 0.15 to 0.20 - on upper end the stress values.
+
+### Plot Raw Abundance NMDS
+```{r}
+
+
+# plot the nmds (show dimensions 1 and 2)
+x11()
+plot(fec_upfor_nmds_bc, "sites",choices = c(1, 2))
+
+# plot the nmds (show dimensions 1 and 3)
+x11()
+plot(fec_upfor_nmds_bc, "sites",choices = c(1, 3))
+
+# plot sites
+plot(fec_upfor_nmds_bc, "sites",choices = c(1, 2))
+orditorp(fec_upfor_nmds_bc, "sites")
+
+# calculate species
+fec_upfor_nmds_bc.spp_scrs <- 
+  sppscores(fec_upfor_nmds_bc) <- fec_vegfor_mat_lt1
+
+# plot nmds with species scores and plots
+cnam <- make.cepnames(names(fec_vegfor_mat_lt1)) # create species codes for display
+sppcount<-colSums(fec_vegfor_mat_lt1 >0)
+sppcover<-colSums(fec_vegfor_mat_lt1)
+sppadj<-sppcover/sppcount
+
+x11()
+plot(fec_upfor_nmds_bc, type = "n")
+points(fec_upfor_nmds_bc, display = "sites", cex = 0.7, pch=21, col="red", bg="yellow")
+
+orditorp(fec_upfor_nmds_bc, "sp", priority = sppadj, pch="+", pcol="blue")
+
+# Plot the NMDS dynamically 
+fec_upfor_nmds_bc_rgl <-ordirgl(fec_upfor_nmds_bc, radius = .01, color="black")
+
+# Identify plots
+identify.rgl(fec_envfor$plotnumber,fec_upfor_nmds_bc$points,1,2,3)
+
+# Identify ecosites
+identify.rgl(fec_envfor$ecosite_title,fec_upfor_nmds_bc$points,1,2,3)
+
+# Create a table of the identify results
+table(identify.rgl(fec_envfor$ecosite_title,fec_upfor_nmds_bc$points,1,2,3))
+
+```
+
+We can evaluate NMDS stress using different vegetation abundance transformations and compare these to the raw abundance stress. Next, we'll use a normalize transformation using the **decostand** function from the vegan R package. We'll then create an NMDS ordination and stress plot.
+
+### Dissimilarity and NMDS - normalized (chord) species abundance
+```{r}
+# Normalized abundance transformation
+fec_vegfor_mat_lt1_norm <-         
+  decostand(fec_vegfor_mat_lt1, method = "normalize")
+
+# Dissimilarity
+fec_vegfor_mat_lt1_dist_bc_norm <- vegdist(fec_vegfor_mat_lt1_norm,method="bray") 
+
+# Normalized cover
+fec_upfor_nmds_bc_norm <-
+  metaMDS(fec_vegfor_mat_lt1_dist_bc_norm,
+          distance = "bray",
+          k = 3,
+          maxit = 50, 
+          trymax = 10,
+          wascores = TRUE)
+fec_upfor_nmds_bc_norm
+
+x11()
+stressplot(fec_upfor_nmds_bc_norm,main="Stress Plot for Boreal and Temperate Forests\n Normalized Abundance and Bray/Curtis") # Produces a Shepard's diagram
+
+x11()
+plot(fec_upfor_nmds_bc_norm, "sites",choices = c(1, 2))
+orditorp(fec_upfor_nmds_bc_norm, "sites")
+
+# calculate species scores
+fec_upfor_spp_scrs_norm <- 
+  sppscores(fec_upfor_nmds_bc_norm) <- fec_vegfor_mat_lt1_norm
+
+# plot species scores
+x11()
+plot(fec_upfor_nmds_bc_norm, display = "species",choices = c(1, 2))
+orditorp(fec_upfor_nmds_bc_norm, display = "species",choices = c(1, 2))
+
+# Plot the NMDS dynamically 
+fec_upfor_nmds_bc_norm_rgl <-ordirgl(fec_upfor_nmds_bc_norm, radius = .01, color="black")
+
+# Identify plots
+identify.rgl(fec_envfor$plotnumber,fec_upfor_nmds_bc_norm$points,1,2,3)
+
+# Identify ecosites
+identify.rgl(fec_envfor$ecosite_title,fec_upfor_nmds_bc_norm$points,1,2,3)
+
+# Create a table of the identify results
+table(identify.rgl(fec_envfor$ecosite_title,fec_upfor_nmds_bc_norm$points,1,2,3))
+
+```
+
+The stress and fit values were about the same fo the raw and normalized cover.
+
+### Dissimilarity and NMDS - log tranformed abundance
+```{r}
+
+# Log transformation
+fec_vegfor_mat_lt1_log <-         
+  decostand(fec_vegfor_mat_lt1, method = "log")
+
+# Dissimilarity
+fec_vegfor_mat_lt1_dist_bc_log <- vegdist(fec_vegfor_mat_lt1_log,method="bray") 
+
+# Log cover NMDS
+fec_upfor_nmds_bc_log <-
+  metaMDS(fec_vegfor_mat_lt1_dist_bc_log,
+          distance = "bray",
+          k = 3,
+          maxit = 50, 
+          trymax = 10,
+          wascores = TRUE)
+
+x11()
+stressplot(fec_upfor_nmds_bc_log,main = "Stress Plot for Boreal and Temperate Forests\n Log Abundance and Bray/Curtis") # Produces a Shepard's diagram
+
+x11()
+plot(fec_upfor_nmds_bc_log, "sites",choices = c(1, 2))
+
+# calculate species scores
+fec_upfor_spp_scrs_log <- 
+  sppscores(fec_upfor_nmds_bc_log) <- fec_vegfor_mat_lt1_log
+
+x11()
+plot(fec_upfor_nmds_bc_log, display = "species",choices = c(1, 2))
+orditorp(fec_upfor_nmds_bc_log, display = "species",choices = c(1, 2))
+
+# Plot the NMDS dynamically 
+fec_upfor_nmds_bc_log_rgl <-ordirgl(fec_upfor_nmds_bc_log, radius = .01, color="black")
+
+# Identify plots
+identify.rgl(fec_envfor$plotnumber,fec_upfor_nmds_bc_log$points,1,2,3)
+
+# Identify ecosites
+identify.rgl(fec_envfor$ecosite_title,fec_upfor_nmds_bc_log$points,1,2,3)
+
+# Create a table of the identify results
+table(identify.rgl(fec_envfor$ecosite_title,fec_upfor_nmds_bc_log$points,1,2,3))
+
+```
+
+The stress of the NMDS prepared using the log transformed data 
+
+### Explore the gradients in the ordination - Generalized Additive Models
+
+```{r}
+# Generalized Additive Models
+x11()
+plot(fec_upfor_nmds_bc_log, "sites",choices = c(1, 2))
+
+# Elevation
+plot(fec_upfor_nmds_bc_log, "sites",choices = c(1, 2))
+surf_elev <- ordisurf(fec_upfor_nmds_bc_log,fec_envfor$elevation_m,choices = c(1, 2))
+summary(surf_elev)
+
+# Water table
+plot(fec_upfor_nmds_bc_log, "sites",choices = c(1, 2))
+surf_watertab <- ordisurf(fec_upfor_nmds_bc_log,fec_envfor$depth_to_water_table_cm,choices = c(1, 2))
+summary(surf_watertab)
+
+# Surface Water cover
+plot(fec_upfor_nmds_bc_log, "sites",choices = c(1, 2))
+surf_water <- ordisurf(fec_upfor_nmds_bc_log,fec_envfor$water,choices = c(1, 2))
+summary(surf_water)
+
+# Exposed mineral soil cover - Dimensions 1 and 2
+plot(fec_upfor_nmds_bc_log, "sites",choices = c(1, 2))
+surf_soil <- ordisurf(fec_upfor_nmds_bc_log,fec_envfor$soil,choices = c(1, 2))
+summary(surf_soil)
+
+# Exposed mineral soil cover - Dimensions 1 and 3
+plot(fec_upfor_nmds_bc_log, "sites",choices = c(1, 3))
+surf_soil_13 <- ordisurf(fec_upfor_nmds_bc_log,fec_envfor$soil,choices = c(1, 3))
+summary(surf_soil_13)
+
+# Depth of Surface Organics
+plot(fec_upfor_nmds_bc_log, "sites",choices = c(1, 2))
+surf_org <- ordisurf(fec_upfor_nmds_bc_log,fec_envfor$depth_of_organic_matter_cm,choices = c(1, 2))
+summary(surf_org)
+
+# Total live vascular cover
+plot(fec_upfor_nmds_bc_log, "sites",choices = c(1, 2))
+surf_live <- ordisurf(fec_upfor_nmds_bc_log,fec_envfor$laivascular,choices = c(1, 2))
+summary(surf_live)
+
+# Total cryptogram cover
+plot(fec_upfor_nmds_bc_log, "sites",choices = c(1, 2))
+surf_crypt <- ordisurf(fec_upfor_nmds_bc_log,fec_envfor$bryophytes_and_lichens,choices = c(1, 2))
+summary(surf_crypt)
+
+# Sphagnum cover
+plot(fec_upfor_nmds_bc_log, "sites",choices = c(1, 2))
+surf_sphag <- ordisurf(fec_upfor_nmds_bc_log,fec_vegfor_mat$Sphagnum,choices = c(1, 2))
+summary(surf_sphag)
+
+```
+
+### Explore the gradients in the ordination - Canonical Correspondence Analysis
+
+```{r}
+bc.cca <- vegan::cca(fec_vegfor_mat_lt1_log ~ depth_of_organic_matter_cm  + elevation_m + depth_to_water_table_cm + fec_envfor$laivascular, data=fec_envfor,na.action = na.exclude)
+bc.cca
+x11()
+plot(bc.cca, main = "CCA Saskatchewan Forest Ecosystem Classification Dataset")
+anova.cca(bc.cca, by = "axis")
+```
+
+### Explore the gradients in the ordination - categorical variables
+```{r}
+# Ecoregion
+table(fec_envfor$ecoregion_title)
+
+# Symbolize Ecoregions on the Dynamic Ordination
+fec_upfor_nmds_bc_log_rgl <-ordirgl(fec_upfor_nmds_bc_log, radius = .005, color="black")
+
+orglpoints(fec_upfor_nmds_bc_log$points[fec_envfor$ecoregion_title=="Boreal Plain",],display="sites",color="red",radius=.010) 
+orglpoints(fec_upfor_nmds_bc_log$points[fec_envfor$ecoregion_title=="Boreal Shield",],display="sites",color="yellow",radius=.010) 
+orglpoints(fec_upfor_nmds_bc_log$points[fec_envfor$ecoregion_title=="Prairie",],display="sites",color="green",radius=.010) 
+orglpoints(fec_upfor_nmds_bc_log$points[fec_envfor$ecoregion_title=="Taiga Shield",],display="sites",color="blue",radius=.010) 
+
+# Test significance of the distribution of ecoregion title along the ordination axes
+fec_upfor_nmds_bc_log_dsv <- nmds(fec_vegfor_mat_lt1_dist_bc_log,k=3)
+ecoregion_test <- ordtest(fec_upfor_nmds_bc_log_dsv,fec_envfor$ecoregion_title)
+
+```
+
+Ecoregion is significant. This means that the pattern of ecoregion relative to the ordination axis scores is significantly different from random, meaning that ecoregion is an important driver of the floristic composition in this dataset.
+
+```{r}
+
+# Soil moisture
+## Step 1: convert each attribute to a factor and specify the order of classes
+
+fec_envfor$soil_moisture_class_title <- factor(fec_envfor$soil_moisture_class_title, levels = c("Dry","Moderately Dry","Very Fresh","Moderately Fresh","Fresh","Moist","Moderately Moist","Very Moist","Moderately Wet","Wet","Very Wet"))
+
+## Update the environment dataframe by adding an aggregated soil moisture column
+fec_envfor <- fec_envfor %>%
+                   as_tibble() %>%
+                    mutate(soil_moisture_agg = soil_moisture_class_title)
+names(fec_envfor)
+
+# Aggregating soil moisture classes in the new column
+fec_envfor$soil_moisture_agg[fec_envfor$soil_moisture_class_title %in% c("Dry","Moderately Dry")]<- "Dry"
+fec_envfor$soil_moisture_agg[fec_envfor$soil_moisture_class_title %in% c("Very Fresh", "Moderately Fresh","Fresh")]<- "Fresh"
+fec_envfor$soil_moisture_agg[fec_envfor$soil_moisture_class_title %in% c("Moist", "Moderately Moist","Very Moist")]<- "Moist"
+fec_envfor$soil_moisture_agg[fec_envfor$soil_moisture_class_title %in% c("Moderately Wet","Wet","Very Wet")]<- "Wet"
+
+# Drop unused factors in the aggregated column
+fec_envfor$soil_moisture_agg<-droplevels(fec_envfor$soil_moisture_agg)
+
+# Symbolize Aggregated Soil Moisture Classes on the Dynamic Ordination
+fec_upfor_nmds_bc_log_rgl <-ordirgl(fec_upfor_nmds_bc_log, radius = .005, color="black")
+
+orglpoints(fec_upfor_nmds_bc_log$points[fec_envfor$soil_moisture_agg=="Dry",],display="sites",color="red",radius=.010) 
+orglpoints(fec_upfor_nmds_bc_log$points[fec_envfor$soil_moisture_agg=="Fresh",],display="sites",color="yellow",radius=.010) 
+orglpoints(fec_upfor_nmds_bc_log$points[fec_envfor$soil_moisture_agg=="Moist",],display="sites",color="green",radius=.010) 
+orglpoints(fec_upfor_nmds_bc_log$points[fec_envfor$soil_moisture_agg=="Wet",],display="sites",color="blue",radius=.010) 
+
+
+
+# Test significance of the distribution of moisture classes along the ordination axes, this may take a few minutes to run
+fec_upfor_nmds_bc_log_dsv <- nmds(fec_vegfor_mat_lt1_dist_bc_log,k=3)
+moist_test <- ordtest(fec_upfor_nmds_bc_log_dsv,fec_envfor$soil_moisture_agg)
+
+# Aggregated soil moisture class is not significant
+
+```
+
+```{r}
+# Dominant Tree Species -- Symbolize dominant tree species on the Dynamic Ordination
+table(fec_envfor$dominanttree) #skipping Ash, lodgepole pine, balsam poplar
+
+fec_upfor_nmds_bc_log_rgl <-ordirgl(fec_upfor_nmds_bc_log, radius = .001, color="black")
+
+# add in one at a time
+orglpoints(fec_upfor_nmds_bc_log$points[fec_envfor$dominanttree=="ABIEBAL",],display="sites",color="blue",radius=.010) 
+orglpoints(fec_upfor_nmds_bc_log$points[fec_envfor$dominanttree=="BETUPAP",],display="sites",color="yellow",radius=.010) 
+orglpoints(fec_upfor_nmds_bc_log$points[fec_envfor$dominanttree=="LARILAR",],display="sites",color="green",radius=.010) 
+orglpoints(fec_upfor_nmds_bc_log$points[fec_envfor$dominanttree=="PICEGLA",],display="sites",color="gray",radius=.010) 
+orglpoints(fec_upfor_nmds_bc_log$points[fec_envfor$dominanttree=="PICEMAR",],display="sites",color="black",radius=.010) 
+orglpoints(fec_upfor_nmds_bc_log$points[fec_envfor$dominanttree=="PINUBAN",],display="sites",color="red",radius=.010) 
+orglpoints(fec_upfor_nmds_bc_log$points[fec_envfor$dominanttree=="POPUTRE",],display="sites",color="orange",radius=.010) 
+
+# Test significance of the distribution of dominant trees along the ordination axes
+domtree_test <- ordtest(fec_upfor_nmds_bc_log_dsv,fec_envfor$dominanttree)
+
+# Dominant tree is not significant
+```
+
+### Correlation analysis
+
+First, create a folder in the working directory to store exported tables.
+
+```{r}
+
+dir.create(file.path("tables"))
+
+```
+
+Calculate the correlations of each species with the 3 NMDS axes. This is a type of indirect gradient analysis. We can then sort the results by axis, looking at the species that have high positive and negative correlations with each axis. We can then apply our knowledge of the ecology of the species to help us understand the gradients represented by the ordination axes.
+
+```{r}
+# Correlation analysis
+
+fec_upfor_sppcor_log <-
+  cor(fec_vegfor_mat_lt1_log,
+      fec_upfor_nmds_bc_log$points,
+      use = "complete.obs",
+      method = "pearson")
+
+# Sort by NMDS axis 1
+fec_upfor_sppcor_log <- fec_upfor_sppcor_log[order(fec_upfor_sppcor_log[,1],decreasing = TRUE),] 
+
+write.csv(fec_upfor_sppcor_log, file = "tables/fec_upfor_sppcor_log_PearsonCor.csv")
+
+```
+
+Next, open the csv file that we created and review the results.
+
+## Cluster Analysis
+
+### Partitioning Around Medoids (PAM) - K-medoids clustering - log transformed
+
+PAM is a partitioning medoid-based clustering approach. Medoid-based clustering selects k representative plots representing k clusters and assigns all other  objects to a cluster, based on similarity to the representative plots. PAM uses "silhouette width" as a measure of cluster integrity."Silhouette" refers to a metric used to evaluate how well a plot fits within the cluster is assigned to compared to other clusters, essentially measuring the "separation" between clusters and the "cohesion" within a cluster. A higher silhouette score indicates better cluster quality; it is often visualized through a "silhouette plot" which helps identify potential misclassified data points or suggest the optimal number of clusters by comparing the average silhouette scores across different clustering solutions. Silhouettes are calculated as the within cluster similarity/between cluster similarity.
+
+```{r}
+# Evaluate the average within to between cluster similar ratio (silhouette width) for a variety of cluster numbers, this may take a few minutes
+
+fec_vegfor_log_pamsel<-pam.select(fec_vegfor_mat_lt1_dist_bc_log,k=30)
+fec_vegfor_log_pamsel
+```
+
+Since PAM is a partitioning approach to clustering it requires that the user input the number of clusters. To select the optimum number of clusters the user may have general idea of how many clusters would be appropriate and then evaluates (using silhouette widths or related methods) the results from several clustering runs using different k values. The function function **pam.select** simplifies this process by allowing the user to run a number of clustering runs using different values of k and reports the average silhouette width of each. If you encounter an error running **pam.select** you need to go to the top of the RMarkdown document and copy, paste, and run the code that creates the **pam.select** function.
+
+The two cluster classification maximized the average silhouette width.
+
+```{r}
+# Create 2 cluster classification
+fec_vegfor_log_pam_2 <- pam(fec_vegfor_mat_lt1_dist_bc_log,k=2)
+attributes(fec_vegfor_log_pam_2)
+x11()
+plot(fec_vegfor_log_pam_2)
+
+```
+
+The silhouette plots shows silhouette (lines) for each plot organized by cluster and sorted from highest (the medoid) to the lowest. Plots that don't fit well in the cluster have negative silhouette widths (called "reversals").
+
+Evaluating different components of the PAM clustering object.
+```{r}
+# Vector with plot assignments to clusters
+fec_vegfor_log_pam_2$clustering # clustering vector that assigns a cluster to each plot
+
+table(fec_vegfor_log_pam_2$clustering) # number of plots per cluster
+
+# Silhouette information
+fec_vegfor_log_pam_2$silinfo # contains several pieces of information about the classification produced by the clustering
+
+fec_vegfor_log_pam_2$silinfo$widths[1:30,] # list of plots with assigned cluster, plot silhouette width, and next most similar cluster
+
+fec_vegfor_log_pam_2$silinfo$avg.width # average silhouette width across all clusters
+
+fec_vegfor_log_pam_2$silinfo$clus.avg.widths # average silhouette width for each cluster
+
+# It can be useful to export the silhouette widths for further review and to document the results of the clustering
+
+write.csv(fec_vegfor_log_pam_2$silinfo$widths,"tables/fec_vegfor_log_pam_2$silinfo$widths.csv")
+
+```
+
+### Explore the clusters
+
+Cluster 1
+```{r}
+
+# list the silinfo for a specific cluster (Cluster 1)
+fec_vegfor_log_pam_2$silinfo$widths[fec_vegfor_log_pam_2$silinfo$widths[,1]==1,]
+
+# review the vegetation in the cluster 1 medoid plot (plot with highest silhouette width in cluster, the plot around which all other plots cluster)
+fec_vegfor %>% 
+  as_tibble() %>%
+        filter(plotnumber %in% c(1890)) %>%
+          arrange(desc(cover_percent),physiog_agg,analysis_name) %>%
+            print(n=30)
+```
+
+```{r}
+# list the silinfo for a specific cluster (Cluster 2)
+fec_vegfor_log_pam_2$silinfo$widths[fec_vegfor_log_pam_2$silinfo$widths[,1]==2,]
+
+# review the vegetation in the cluster 2 medoid plot (plot with highest silhouette width in cluster, the plot around which all other plots cluster)
+fec_vegfor %>% 
+  as_tibble() %>%
+        filter(plotnumber %in% c(1315)) %>%
+          arrange(desc(cover_percent),physiog_agg,analysis_name) %>%
+            print(n=30)
+```
+
+# Constancy/Cover
+```{r}
+
+## Cluster 1
+
+const_abund(fec_vegfor_mat_lt1,fec_vegfor_log_pam_2$clustering,clusnum = 1,const_thresh=60,cov_thresh = 0)
+
+# Default order of above is by spp_count, mean_abundance, species name; and includes only species with >= 60% constancy (const_thresh setting) and no cover threshold (cov_thresh)
+
+# Add lifeform and reorder by lifeform and species (and vice versa) with all species included
+const_tmp <- const_abund(fec_vegfor_mat_lt1,fec_vegfor_log_pam_2$clustering,clusnum = 1,const_thresh=0,cov_thresh = 0)
+
+const_tmp_lfrm <- 
+  const_tmp %>%
+    left_join(lifeform_mat, by = join_by(species == analysis_name_w_layer)) %>%
+      dplyr::select(physiog_agg, species, mean_abundance,stdev,min_abundance,max_abundance,median_abundance,spp_count,constancy_percent)
+
+# Sorted by lifeform then species
+const_tmp_lfrm %>%
+  arrange(physiog_agg, species) %>%
+    print(n=Inf)
+
+# Sorted by species then lifeform
+const_tmp_lfrm %>%
+  arrange(species,physiog_agg) %>%
+    print(n=Inf)
+
+## Cluster 2
+
+const_abund(fec_vegfor_mat_lt1,fec_vegfor_log_pam_2$clustering,clusnum = 2,const_thresh=60,cov_thresh = 0)
+
+# Add lifeform and reorder by lifeform and species with all species included
+const_tmp <- const_abund(fec_vegfor_mat_lt1,fec_vegfor_log_pam_2$clustering,clusnum = 2,const_thresh=0,cov_thresh = 0)
+
+const_tmp_lfrm <- 
+  const_tmp %>%
+    left_join(lifeform_mat, by = join_by(species == analysis_name_w_layer)) %>%
+      dplyr::select(physiog_agg, species, mean_abundance,stdev,min_abundance,max_abundance,median_abundance,spp_count,constancy_percent)
+
+# Sorted by lifeform then species
+const_tmp_lfrm %>%
+  arrange(physiog_agg, species) %>%
+    print(n=Inf)
+
+# Sorted by species then lifeform
+const_tmp_lfrm %>%
+  arrange(species,physiog_agg) %>%
+    print(n=Inf)
+
+```
+
+Cluster 1 = Primarily quaking aspen and white spruce forests and woodland
+Cluster 2 = Primarily Jack pine and black spruce forests and woodlands
+
+### Indicator species analysis - PAM Clustering
+
+#### Dufrene-Legendre Indicator Species Analysis
+
+Indicator species: A species with known fidelity and specificity to certain habitat conditions, and thus serving as an indicator of, for example, climate, soil moisture, soil nutrients, flooding regime, disturbance history, etc.
+
+```{r}
+
+fec_vegfor_log_pam_2_indduf <- indval(fec_vegfor_mat_lt1,fec_vegfor_log_pam_2$clustering)
+
+# Short summary
+summary(fec_vegfor_log_pam_2_indduf, p=0.05, type='short')
+
+# Long summary
+summary(fec_vegfor_log_pam_2_indduf, p=0.05, type='long', digits=2, show=0.40, sort=FALSE, too.many=100)
+
+# Additional attributes
+attributes(fec_vegfor_log_pam_2_indduf)
+
+```
+
+* The short summary provides statistics to use for comparing results between different clustering results
+* The long summary shows the significant indicator species by cluster and allows the what's shown to tailored
+* Cluster 1 most important indicators = *Aralia nudicaulis*, *Cornus canadensis*, *Populus tremuloides*, *Rosa acicularis*, and *Rubus pubscens*
+* Cluster 2 most important indicators = *Cladonia*, *Cladina*, *Dicranum*, *Picea mariana* (saplings), *Pleurozium*, *Vaccinium vitis-idaea*
+
+Additional attributes of the inval object can be viewed by using attributes().
+
+### Multi-level pattern analysis
+
+Multi-level pattern analysis performs indicator species analysis with individual clusters and for cluster combinations.
+
+```{r}
+
+fec_vegfor_log_pam_2_ind<- multipatt(fec_vegfor_mat_lt1,fec_vegfor_log_pam_2$clustering, 
+                    control = how(nperm=100)) 
+summary(fec_vegfor_log_pam_2_ind, indvalcomp=TRUE)
+
+```
+
+The results are similar (particularly for cluster 1) but the output provides additional statistics. Important indicators for cluster using multi-level pattern analysis are: *Picea mariana* (seedlings), *Bryoria*, *Rhododendron groenlandicum*, and *Pinus_banksiana* (saplings).
+
+* A = specificity, the probability that the surveyed site belongs to the target site group given the fact that the species has been found
+
+* B = fidelity or sensitivity (constancy) = the probability of finding the species in sites belonging to the site group
+
+* Stat = metric that combined A and B. Species with the high values of A and B have the highest indicator value (high frequency of occurrence and when they occur they strongly indicative of the target site group)
+
+* p.value = significance value of the indicator
+
+**Summary of initial clustering results**
+
+Cluster 1 = Primarily Boreal Plain and all  of the Prairie plots, and predominantly quaking aspen, white spruce, and balsam poplar forests and woodlands
+
+Cluster 2 = Nearly all of the Boreal Shield and Taiga Shield plots, and predominantly Jack pine and black spruces, most of the soils are dry in this cluster but there is a subset of 100 plots that are wet and 187 plots that are moist
+
+### Environment Data
+
+#### Cross tabulate clusters and ecoregions
+
+```{r}
+
+table(fec_envfor$ecoregion_title,fec_vegfor_log_pam_2$clustering)
+```
+
+The plots in the Boreal Plain ecoregion are split approximately evenly across the 2 clusters
+
+#### Cross tabulate clusters and ecosites
+
+```{r}
+
+table(fec_envfor$ecosite_title,fec_vegfor_log_pam_2$clustering)
+
+```
+
+Cluster 1 = Balsam poplar, trembling aspen, white spruce ecosites (and a few forested wetlands)
+Cluster 2 = Black spruce and Jack pine, cluster 2 also includes many forested wetlands (black spruce and larch)
+
+White birch ecosites are split between the 2 clusters
+
+Cluster 2 is primarily upland ecosites but also includes 3 wetland ecosites:  Black spruce - tamarack treed swamp, Black spruce treed bog, and Black spruce/balsam poplar swamp/river alder swamp
+
+#### Cross tabulate clusters and dominant tree species
+
+```{r}
+
+table(fec_envfor$dominanttree,fec_vegfor_log_pam_2$clustering)
+
+```
+
+The dominant trees in cluster 1 are primarily white spruce and quaking aspen, and in cluster 2 are black spruce and Jack pine.
+
+#### Cross tabulate clusters and aggregated soil moisture classes
+
+```{r}
+
+table(fec_envfor$soil_moisture_agg)
+
+table(fec_envfor$soil_moisture_agg,fec_vegfor_log_pam_2$clustering)
+
+# As a percentage of the total number of plots
+round((table(fec_envfor$soil_moisture_agg,fec_vegfor_log_pam_2$clustering)/dim(fec_envfor)[[1]])*100,0)
+
+# As a percentage of the number of plots in each cluster
+clsz <- rbind(table(fec_vegfor_log_pam_2$clustering),table(fec_vegfor_log_pam_2$clustering),table(fec_vegfor_log_pam_2$clustering),table(fec_vegfor_log_pam_2$clustering))
+round((table(fec_envfor$soil_moisture_agg,fec_vegfor_log_pam_2$clustering)/clsz)*100,)
+
+# As a percentage of the number of plots in each moisture class
+sma <- cbind(table(fec_envfor$soil_moisture_agg),table(fec_envfor$soil_moisture_agg))
+round((table(fec_envfor$soil_moisture_agg,fec_vegfor_log_pam_2$clustering)/sma)*100,0)
+
+```
+
+Fresh soil moisture is the most common aggregated class and is approximately evenly split between the two clusters
+
+* Cluster 1 is mostly fresh soil moisture
+* Cluster 2 is mostly Fresh and Dry
+* Dry soil moisture is mostly in cluster 2
+* Wet soil moisture is also mostly in cluster 2
+
+#### Soil moisture class and ecosite cross-tabulation - Wet soil moisture
+
+```{r}
+
+table(fec_envfor$ecosite_title[fec_envfor$soil_moisture_agg=="Wet"], fec_envfor$soil_moisture_agg[fec_envfor$soil_moisture_agg=="Wet"])
+
+table(fec_envfor$ecosite_title,fec_vegfor_log_pam_2$clustering)
+```
+
+The two ecosites with the greatest number of plots with wet soil moisture are Black spruce - tamarack treed swamp (most plots in cluster 2)
+and Black spruce treed bog (all plots in cluster 2). Cluster 2 has a soil moisture gradient from dry to wet.
+
+#### Box Plots by cluster
+
+We can use boxplots to assess the variability of continous environmental and vegetation structure data attributes by cluster.
+# Box plots by cluster
+
+```{r}
+# Append the PAM clustering results to the environmental data frame
+
+fec_envfor <- fec_envfor %>%
+  mutate(log_pam_2_clus = fec_vegfor_log_pam_2$clustering)
+
+# Convert the newly created cluster results column to a factor
+fec_envfor$log_pam_2_clus<-as.factor(fec_envfor$log_pam_2_clus)  
+
+# topographic attributes
+x11()
+boxplot(fec_envfor$elevation_m ~ fec_envfor$log_pam_2_clus)
+
+# slope aspect boxplot using a simple normalization technique
+boxplot(fec_envfor$aspect/360 ~ fec_envfor$log_pam_2_clus)
+
+# soil and ground cover
+
+boxplot(fec_envfor$depth_of_organic_matter_cm ~ fec_envfor$log_pam_2_clus)
+
+boxplot(fec_envfor$cf_percent_120 ~ fec_envfor$log_pam_2_clus)
+
+boxplot(fec_envfor$water ~ fec_envfor$log_pam_2_clus)
+
+boxplot(fec_envfor$soil~ fec_envfor$log_pam_2_clus)
+
+# vegetation attributes
+boxplot(fec_envfor$mean_tree_age_year ~ fec_envfor$log_pam_2_clus)
+
+boxplot(fec_envfor$laivascular ~ fec_envfor$log_pam_2_clus)
+
+boxplot(fec_envfor$bryophytes_and_lichens ~ fec_envfor$log_pam_2_clus)
+
+
+```
+
+##################################################################################################################
+## Hierarchical Clustering using hclust - log transformed abundance
+##################################################################################################################
+
+The function **hclust** implements an agglomerative, hierarchical clustering. There are several options for methods, the Ward methods attempts to find compact, spherical clusters. See [hclust: Hierarchical Clustering](https://www.rdocumentation.org/packages/stats/versions/3.6.2/topics/hclust) for more details.
+```{r}
+
+# Create clustering and plot the dendrogram
+fec_vegfor_log_hclust_ward <- hclust(fec_vegfor_mat_lt1_dist_bc_log, method = 'ward.D2') 
+
+x11()
+plot(fec_vegfor_log_hclust_ward, xlab = "Hierarchical Clustering - Ward")
+
+```
+
+The height of the arms is indicative of the similarity or differences between the clusters below. The greater height, the greater the difference. Selecting the number of clusters requires interpreting the dendrogram and typically the dendrogram is split into clusters at a level with the greatest height. In this case, two clusters has greatest height, so we'll create a 2 cluster solution. But let's also create a 4 cluster classification.
+
+2 Clusters
+```{r}
+
+# Use cutree to "cut" the dendrogram at 2 clusters, the output is a vector with plot assignments to clusters
+fec_vegfor_log_hc_cut_ward_2 <- cutree(fec_vegfor_log_hclust_ward, k = 2)
+
+fec_vegfor_log_hc_cut_ward_2 
+
+table(fec_vegfor_log_hc_cut_ward_2)
+
+x11()
+plot(fec_vegfor_log_hclust_ward, xlab = "Hierarchical Clustering - 2 Clusters")
+
+rect.hclust(fec_vegfor_log_hclust_ward , k = 2, border = 2:6)
+abline(h = 6, col = 'red')
+
+```
+
+Create a 4 Cluster classification 
+```{r}
+# 4 cluster classification
+fec_vegfor_log_hc_cut_ward_4 <- cutree(fec_vegfor_log_hclust_ward, k = 4)
+
+table(fec_vegfor_log_hc_cut_ward_4)
+
+x11()
+plot(fec_vegfor_log_hclust_ward, xlab = "Hierarchical Clustering - 4 Clusters")
+
+rect.hclust(fec_vegfor_log_hclust_ward , k = 4, border = 2:6)
+abline(h = 5, col = 'red')
+
+```
+
+### Explore the clusters - 2 Cluster Hierarchical Clustering
+```{r}
+
+## Constancy/cover - Cluster 1
+const_abund(fec_vegfor_mat_lt1,fec_vegfor_log_hc_cut_avg_2,clusnum = 1,const_thresh=60)
+
+## Constancy/cover - Cluster 2
+const_abund(fec_vegfor_mat_lt1,fec_vegfor_log_hc_cut_avg_2,clusnum = 2,const_thresh=60)
+
+# Explore cluster 2 plots
+
+# Compare the 2 PAM clusters to the 2 hclust clusters
+table(fec_vegfor_log_pam_2$clustering,fec_vegfor_log_hc_cut_avg_2)
+
+```
+
+### Explore the clusters - 4 Cluster Hierarchical Clustering
+```{r}
+## Constancy/cover Cluster 1
+const_abund(fec_vegfor_mat_lt1,fec_vegfor_log_hc_cut_avg_4,clusnum = 1,const_thresh=60)
+
+## Constancy/cover Cluster 2
+const_abund(fec_vegfor_mat_lt1,fec_vegfor_log_hc_cut_avg_4,clusnum = 2,const_thresh=60)
+
+## Constancy/cover Cluster 3
+const_abund(fec_vegfor_mat_lt1,fec_vegfor_log_hc_cut_avg_4,clusnum = 3,const_thresh=60)
+
+## Constancy/cover Cluster 4
+const_abund(fec_vegfor_mat_lt1,fec_vegfor_log_hc_cut_avg_4,clusnum = 4,const_thresh=60)
+
+# Compare the 2 PAM clusters to the 4 hclust clusters
+table(fec_vegfor_log_pam_2$clustering,fec_vegfor_log_hc_cut_avg_4)
+
+```
+
+## Cross tabulate clusters and ecoregions  for the hcluster classifications
+
+```{r}
+
+# Hclust 2 clusters
+table(fec_envfor$ecoregion_title,fec_vegfor_log_hc_cut_avg_2)
+
+# PAM 2 clusters
+table(fec_envfor$ecoregion_title,fec_vegfor_log_pam_2$clustering)
+
+# Hclust 4 clusters
+table(fec_envfor$ecoregion_title,fec_vegfor_log_hc_cut_avg_4)
+
+```
+
+Clusters 1 and 2 from hclust have a similar break down by ecoregion as the cluster PAM classification. 
+
+### Cross tabulate clusters and ecosites
+
+```{r}
+
+table(fec_envfor$ecosite_title,fec_vegfor_log_hc_cut_avg_2)
+
+```
+
+Similar to the PAM 2 cluster classification. 
+
+Cluster 1 = Balsam poplar, trembling aspen, white spruce ecosites (and a few forested wetlands)
+Cluster 2 = Black spruce and Jack pine, cluster 2 also includes forested wetlands (black spruce and larch)
+
+White birch ecosites are split between the 2 clusters (mostly cluster 2)
+
+### Cross tabulate clusters and dominant tree species
+
+We can then review the other cross-tabulations and compare the results to the PAM 2 cluster classification.
+```{r}
+
+table(fec_envfor$dominanttree,fec_vegfor_log_hc_cut_avg_2)
+
+```
+
+More of less parallel the ecosite cross-tabulation
+
+### Cross tabulate clusters and aggregated soil moisture classes - 2 clusters
+
+```{r}
+
+table(fec_envfor$soil_moisture_agg)
+
+table(fec_envfor$soil_moisture_agg,fec_vegfor_log_hc_cut_avg_2)
+
+```
+
+Fresh soil moisture is the most common aggregated class and is approximately evenly split between the two clusters
+
+* Cluster 1 is mostly fresh soil moisture
+* Cluster 2 is mostly Fresh and Dry
+* Dry soil moisture is mostly in cluster 2
+* Wet soil moisture is also mostly in cluster 2
+
+### Cross tabulate clusters and aggregated soil moisture classes - 2 clusters
+
+```{r}
+
+table(fec_envfor$soil_moisture_agg,fec_vegfor_log_hc_cut_avg_4)
+
+```
+
+Fresh soil moisture is the most common aggregated class and is approximately evenly split between the two clusters
+
+* Cluster 1 is mostly fresh soil moisture
+* Cluster 2 is mostly Fresh and Dry
+* Cluster 3 is mostly moist and wet
+* Cluster 4 is mostly fresh and moist
+
+### Indicator species analysis - hclust Clustering
+
+#### Dufrene-Legendre Indicator Species Analysis
+
+```{r}
+
+fec_vegfor_log_hclus_2_indduf <- indval(fec_vegfor_mat_lt1,fec_vegfor_log_hc_cut_avg_2)
+
+# Short summary
+summary(fec_vegfor_log_hclus_2_indduf, p=0.05, type='short')
+
+# Compare with the PAM classification indicator species analysis
+summary(fec_vegfor_log_pam_2_indduf, p=0.05, type='short')
+
+```
+
+The short summary provides statistics to use for comparing results between different clustering results. Comparing the short summary results across different clustering results can provide one quick criteria for selecting which clustering to use for your classification. The long summary should also be compared between different clustering outputs.
+
+# Long summary
+```{r}
+summary(fec_vegfor_log_hclus_2_indduf, p=0.05, type='long', digits=2, show=0.40, sort=FALSE, too.many=100)
+
+# Additional attributes
+attributes(fec_vegfor_log_hclus_2_indduf)
+
+```
+
+* Cluster 1 most important indicators = *Aralia nudicaulis*, *Cornus canadensis*, *Maianthemum canadense*, *Brachythecium*, *Populus_tremuloides* (Overstory), and *Rubus pubscens*
+* Cluster 2 most important indicators = *Cladonia*, *Cladina*, *Dicranum*, *Picea mariana* (saplings), *Pleurozium*, *Vaccinium vitis-idaea*
+
+Additional attributes of the inval object can be viewed by using attributes().
+
+### Indicator Species analysis using Multiple Pattern Analysis
+
+Hclust 2-cluster classification
+```{r}
+
+fec_vegfor_log_hclus_2_ind<- multipatt(fec_vegfor_mat_lt1,fec_vegfor_log_hc_cut_avg_2, 
+                    control = how(nperm=100)) 
+summary(fec_vegfor_log_hclus_2_ind, indvalcomp=TRUE)
+
+```
+
+* Cluster 1 most important indicators = *Rosa acicularis*, *Aralia nudicaulis*, *Cornus canadensis*, *Populus tremuloides*, *Linnaea borealis*, and *Rubus pubscens*
+* Cluster 2 most important indicators = *Cladina*, *Pinus_banksiana* (saplings), *Picea mariana* (saplings), *Rhododendron groenlandicum*, *Vaccinium vitis-idaea*, *Bryoria*
+
+Hclust 4-cluster classification
+```{r}
+
+fec_vegfor_log_hclus_4_ind<- multipatt(fec_vegfor_mat_lt1,fec_vegfor_log_hc_cut_avg_4, 
+                    control = how(nperm=100)) 
+summary(fec_vegfor_log_hclus_4_ind, indvalcomp=TRUE)
+
+```
+
+
+With 3 or more clusters the multi-level pattern analysis shows the significant indicators for each cluster alone (if they exist) and an additional level of indicators, those species that are indicative of combinations of clusters. 
+
+For example, Group 1+4 show a number of shared significant indicators. This approach can be useful for identifying clusters that are similar to one another floristically at a higher level of aggregation (e.g., alliance, group, macrogroup). However, if you have more than 4 clusters, combinations of greater than 4 to 5 clusters can be challenging to interpret.
+
+### Compare the assignment of plots between the two classifications
+
+```{r}
+
+# Cross-tabulation 
+table(fec_vegfor_log_pam_2$clustering, fec_vegfor_log_hc_cut_avg_2)
+
+
+# List the plots assigned to PAM cluster 1 and hclust cluster 2
+row.names(fec_vegfor_mat_lt1_log)[fec_vegfor_log_pam_2$clustering == 1 & fec_vegfor_log_hc_cut_avg_2 == 2]
+
+# list the species for one of the plots
+fec_vegfor %>% 
+    as_tibble() %>%
+          filter(plotnumber %in% c(53)) %>%
+            arrange(desc(cover_percent),physiog_agg,analysis_name) %>%
+              print(n=100)
+
+# List the plots assigned to PAM cluster 2 and hclust cluster 1
+row.names(fec_vegfor_mat_lt1_log)[fec_vegfor_log_pam_2$clustering == 2 & fec_vegfor_log_hc_cut_avg_2 == 1]
+
+# list the species for one of the plots
+fec_vegfor %>% 
+    as_tibble() %>%
+          filter(plotnumber %in% c(120)) %>%
+            arrange(desc(cover_percent),physiog_agg,analysis_name) %>%
+              print(n=100)
+
+```
+
+The two classifications are fairly similar regarding which clusters the plots were assigned to, but the hclust classification. 
+
+Reviewing the plots that aren't consistent between the two classifications can provide some insights into vegetation communities that are in the gray areas of the classification.
+
+### Cluster validity/distinctness and comparing clustering results
+
+Vegetation types may differ in their internal variability. The following section provides some examples of tools that can be used to assess and compare clustering results based on their internal variability.
+
+#### Dunn's index
+A measure of cluster compactness. The ratio between the minimum inter-cluster distances to the maximum intra-cluster diameter, i.e., the distance between the cluster's two furthest points. Well separated and compact clusters have a higher Dunn's index.
+```{r}
+### 
+
+# PAM clusters
+fec_vegfor_log_pam_2_dunn <- dunn(fec_vegfor_mat_lt1_dist_bc_log,fec_vegfor_log_pam_2$clustering)
+fec_vegfor_log_pam_2_dunn
+
+# Hclust clusters
+fec_vegfor_log_hc_cut_avg_2_dunn <- dunn(fec_vegfor_mat_lt1_dist_bc_log,fec_vegfor_log_hc_cut_avg_2)
+fec_vegfor_log_hc_cut_avg_2_dunn
+
+```
+
+The PAM classification has a higher Dunn's index than the hclust classification meaning that the PAM clusters are more compact and thus less variable floristically.
+
+## Cluster variance method: Calculates the amount of compositional variation (i.e. beta diversity) observed among the sites belonging to each cluster
+
+The function clustvar() quantifies the amount of compositional variation (i.e. beta diversity) observed among the sites belonging to each cluster ([De Cáceres and Wiser 2024](https://emf-creaf.github.io/vegclust/articles/VegetationClassification.html)). Lower variability indicates more compact and less variable clusters.
+
+```{r}
+
+# PAM clusters
+clustvar(fec_vegfor_mat_lt1_dist_bc_log,fec_vegfor_log_pam_2$clustering)
+
+# Hclust clusters
+clustvar(fec_vegfor_mat_lt1_dist_bc_log,fec_vegfor_log_hc_cut_avg_2)
+
+```
+
+Based on the results of the cluster variance analysis we can see that the two classifications have similar cluster variance for clusters 1 and 2. 
+
+### Silhouette Method
+
+Clustering objects created using PAM have silhouette widths calculated already. However, clustering results from other functions do not. Therefore we need to create silhouette widths for the hclust clusters.
+```{r}
+
+# hclust clustering
+fec_vegfor_log_hc_cut_avg_2_sil <- silhouette(fec_vegfor_log_hc_cut_avg_2, fec_vegfor_mat_lt1_dist_bc_log)
+x11()
+plot(fec_vegfor_log_hc_cut_avg_2_sil,main="Silhouette Diagram for the hclust clusters")
+summary(fec_vegfor_log_hc_cut_avg_2_sil)
+
+# Export the results
+
+# First add row names
+
+row.names(fec_vegfor_log_hc_cut_avg_2_sil) <- fec_envfor$plotnumber
+
+# Export to a CSV file
+write.csv(fec_vegfor_log_hc_cut_avg_2_sil,"test.csv")
+
+
+# PAM silhouette widths
+fec_vegfor_log_pam_2$silinfo$clus.avg.widths
+x11()
+plot(fec_vegfor_log_pam_2,main="Silhouette Diagram for the PAM clusters")
+
+
+```
+
+PAM cluster 1 have a higher average silhouette width than the hclust cluster meaning that PAM cluster 1 has a higher within-to-between cluster similarity ratio and is therefore PAM cluster 1 is more floristically consistent (and therefore a stronger cluster) than hclust cluster 1. Cluster 2 in each classification had approximately the same average silhouette width.
+
+### Evaluate the clusters in ordination space
+
+#### PAM Clusters
+```{r}
+
+# Symbolize the PAM clusters on the Dynamic Ordination
+fec_upfor_nmds_bc_log_rgl <-ordirgl(fec_upfor_nmds_bc_log, radius = .001, color="black")
+
+orglpoints(fec_upfor_nmds_bc_log$points[fec_vegfor_log_pam_2$clustering == 1,],display="sites",color="darkgreen",radius=.010) 
+orglpoints(fec_upfor_nmds_bc_log$points[fec_vegfor_log_pam_2$clustering == 2,],display="sites",color="orange",radius=.010) 
+
+# Test significance of the distribution of PAM clusters along the ordination axes
+
+ordtest(fec_upfor_nmds_bc_log_dsv,fec_vegfor_log_pam_2$clustering)
+
+```
+
+```{r}
+# Symbolize the hclust 2 clusters on the Dynamic Ordination
+fec_upfor_nmds_bc_log_rgl <-ordirgl(fec_upfor_nmds_bc_log, radius = .001, color="black")
+
+orglpoints(fec_upfor_nmds_bc_log$points[fec_vegfor_log_hc_cut_avg_2 == 1,],display="sites",color="darkgreen",radius=.010) 
+orglpoints(fec_upfor_nmds_bc_log$points[fec_vegfor_log_hc_cut_avg_2 == 2,],display="sites",color="orange",radius=.010) 
+
+# Test significance of the distribution of hclust 2 clusters along the ordination axes
+
+ordtest(fec_upfor_nmds_bc_log_dsv,fec_vegfor_log_hc_cut_avg_2)
+
+```
+
+Hcluster 4-cluster classification
+```{r}
+# Symbolize the hclust 2 clusters on the Dynamic Ordination
+fec_upfor_nmds_bc_log_rgl <-ordirgl(fec_upfor_nmds_bc_log, radius = .001, color="black")
+
+orglpoints(fec_upfor_nmds_bc_log$points[fec_vegfor_log_hc_cut_avg_4 == 1,],col="darkgreen",radius=.010)
+orglpoints(fec_upfor_nmds_bc_log$points[fec_vegfor_log_hc_cut_avg_4 == 2,],col="orange",radius=.010)
+orglpoints(fec_upfor_nmds_bc_log$points[fec_vegfor_log_hc_cut_avg_4 == 3,],col="blue",radius=.010)
+orglpoints(fec_upfor_nmds_bc_log$points[fec_vegfor_log_hc_cut_avg_4 == 4,],col="red",radius=.010)
+
+# Test significance of the distribution of hclust 4 clusters along the ordination axes
+
+ordtest(fec_upfor_nmds_bc_log_dsv,fec_vegfor_log_hc_cut_avg_4)
+```
+
+
+The PAM and hcluster clusters are significant indicating that the pattern of clusters across the ordination axes is significantly different than random, meaning the clusters are truly reflective of important floristic distinctions and gradients in the dataset.
+
+### Symbolize the clusters on the NMDS diagram and visualize the gradients using Generalized Additive Models
+
+```{r}
+x11()
+plot(fec_upfor_nmds_bc_log_dsv)
+points(fec_upfor_nmds_bc_log_dsv,fec_vegfor_log_pam_2$clustering == 1,col="darkgreen")
+points(fec_upfor_nmds_bc_log_dsv,fec_vegfor_log_pam_2$clustering == 2,col="orange")
+
+# Depth of Surface Organics
+surf_org <- ordisurf(fec_upfor_nmds_bc_log_dsv,fec_envfor$depth_of_organic_matter_cm,choices = c(1, 2))
+points(fec_upfor_nmds_bc_log_dsv,fec_vegfor_log_pam_2$clustering == 1,col="darkgreen")
+points(fec_upfor_nmds_bc_log_dsv,fec_vegfor_log_pam_2$clustering == 2,col="orange")
+
+# Total live vascular cover
+surf_live <- ordisurf(fec_upfor_nmds_bc_log_dsv,fec_envfor$laivascular,choices = c(1, 2))
+points(fec_upfor_nmds_bc_log_dsv,fec_vegfor_log_pam_2$clustering == 1,col="darkgreen")
+points(fec_upfor_nmds_bc_log_dsv,fec_vegfor_log_pam_2$clustering == 2,col="orange")
+
+# Total cryptogram cover
+surf_crypt <- ordisurf(fec_upfor_nmds_bc_log_dsv,fec_envfor$bryophytes_and_lichens,choices = c(1, 2))
+points(fec_upfor_nmds_bc_log_dsv,fec_vegfor_log_pam_2$clustering == 1,col="darkgreen")
+points(fec_upfor_nmds_bc_log_dsv,fec_vegfor_log_pam_2$clustering == 2,col="orange")
+
+# Sphagnum cover - dimensions 1 and 2
+surf_sphag <- ordisurf(fec_upfor_nmds_bc_log_dsv,fec_vegfor_mat$Sphagnum,choices = c(1, 2))
+surf_sphag
+points(fec_upfor_nmds_bc_log_dsv,fec_vegfor_log_pam_2$clustering == 1,col="darkgreen")
+points(fec_upfor_nmds_bc_log_dsv,fec_vegfor_log_pam_2$clustering == 2,col="orange")
+
+```
+
+Hcluster 4-cluster classification
+```{r}
+
+# Surface organic matter thickness GAM
+surf_org <- ordisurf(fec_upfor_nmds_bc_log_dsv,fec_envfor$depth_of_organic_matter_cm,choices = c(1, 2))
+points(fec_upfor_nmds_bc_log_dsv,fec_vegfor_log_hc_cut_avg_4 == 1,col="darkgreen")
+points(fec_upfor_nmds_bc_log_dsv,fec_vegfor_log_hc_cut_avg_4 == 2,col="orange")
+points(fec_upfor_nmds_bc_log_dsv,fec_vegfor_log_hc_cut_avg_4 == 3,col="blue")
+points(fec_upfor_nmds_bc_log_dsv,fec_vegfor_log_hc_cut_avg_4 == 4,col="red")
+
+# Add additional points to symbolize plots with a wet soil moisture class
+points(fec_upfor_nmds_bc_log_dsv,fec_envfor$soil_moisture_agg=="Wet" ,col="black",pch=2,cex=1.2)
+
+```
+
+Looking at the Canadian National Vegetation Classification, in Saskatchewan there are the following macrogroups and groups. For group discussion, discuss the cluster results we reviewed above with the forest and woodland macrogroups and groups for central Canada.
+
+**West-Central North American Boreal Forest & Woodland Macrogroup (M496)**
+
+* Central Boreal Mesic-Moist Black Spruce - Jack Pine Forest (G640)
+* Western Canadian Subarctic Woodland (G633)
+* Central Boreal Dry Jack Pine Forest (G639)
+* Central Boreal Mesic-Moist Aspen - White Spruce Forest (G641)
+
+**North American Boreal Conifer Poor Swamp Macrogroup (M299)**
+
+* West-Central Boreal Black Spruce - Tamarack Poor Swamp (G843)
+
+**North American Boreal & Subboreal Bog & Acidic Fen (M876)**
+
+* Western North American Boreal Bog & Acidic Fen (G360)

@@ -1,0 +1,1321 @@
+---
+title: "CNVC_ELC_Practical_Session_2"
+author: "Aaron Wells"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Practical Session 2
+
+## Prairie Classification
+
+### Introduction
+
+The prairie data set included vegetation plot data from southwest Manitoba, Saskatchewan, and southeast Alberta. Ecosites and plant community type (i.e., association) classifications were available for all of the provinces and the plot data included assignments of each plot to an ecosite and plant community type. In addition, the ecosites are mapped. The CNVC was also developed from the top down through the macrogroup level. Thus, the objective of this classification work was to develop the group and alliance classifications for the prairie. 
+
+Because a robust set of ecosites and plant communities types were available, an important goal was to ensure that group and alliance dovetailed with these classifications. To so, we employed a type-based approach. In a type-based approach, the plot data are aggregated up to the community level and the communities become the basic unit of analysis. Prominent values (PV) were calculated from the constancy and average cover for species in a community and PV was used as the abundance metric for the analysis. The idea here was that by aggregating up to the community level the variability in species composition at the plot level would be smoothed out to some degree and thereby the signal within the data for alliances and groups would be more clear. 
+
+Because the data were aggregated to the community level, the environment data is limited for this data set. However, each plant community is nested within an ecosite class. The ecosite classification provides a high degree of environment information synthesized in a single data attribute; therefore, we relied on the ecosite classification in large part for assessing the environment component of the classification. Each province had their own ecosite classification; therefore, we worked with the experts from each province to develop an ecosite cross-reference table and aggregated ecosite classification that was consistent across all provinces.
+
+In the prairie data set, the plant communities are assigned to either a reference or non-reference (highly disturbed/altered) status. The approach we used was to begin by analyzing only the reference plant communities to develop the group and alliance classification, and then assigned the non-reference communities to the most similar group. Developing non-reference alliances was not an objective of the analysis. 
+
+Following the initial data exploration and analysis, we subset the data and analyzed the dry and mesic grassland and shrubland communities which were the majority of the dataset. Next, the panel of prairie vegetation experts assigned preliminary group alliance assignments based on the ecosites, dominant plants, and successional relationships of the plant community types. 
+
+The first part of this practical will run through an example of classifying alliances within an ecosite and aggregating those up to groups. Second, we will review the group classification using multivariate statistical analysis. Lastly, we'll run through an example of assigning new communities (non-reference communities) to an existing classification (the prairie group classification) using R functions in the vegclust R library. This practical session will illustrate a typical analysis cycle working from the bottom up as detailed in Baldwin et al. (2020). While this is a type-based analysis, a similar workflow could be used for plot-based ecosystem classification efforts.
+
+We'll begin this practical session looking at the dry and mesic grassland and shrubland communities in the loam aggregated ecosite. Species with constancy < 20% in their respective plant community were removed from the vegetation data for analysis purposes.
+
+### List of libraries for workshop
+
+#### DELETE ONCE ALL LIBRARIES CONFIRMED
+```{r}
+#  Load the required R libraries
+library(labdsv)
+library(vegan)
+library(cluster)
+library(DBI)
+library(RPostgreSQL)
+library(rstudioapi)
+library(tidyverse)
+library(dplyr)
+library(factoextra)
+library(optpart)
+library(psychTools)
+library(rgl)
+library(vegan3d)
+library("operator.tools")
+library("data.table")
+library("vegclust")
+library(indicspecies)
+library(clValid)
+library(gt)
+
+```
+If you started a new R session, first, copy the libraries and paste them into the console and click return. This will load the R libraries necessary for this session.
+
+```{r}
+library(dplyr)
+library(labdsv)
+library(vegan)
+library(cluster)
+library(optpart)
+library(rgl)
+library(vegan3d)
+library(vegclust)
+library(indicspecies)
+library(clValid)
+library(gt)
+
+```
+
+# Custom Functions
+
+Next, copy to the console and run the next four R functions.
+
+## Function 1: pam.select
+
+```{r}
+pam.select<-function (dist, k) 
+{
+    library(cluster)
+    tmp.clus <- c(2:k)
+    tmp.width <- rep(0, length = k - 1)
+    for (i in 1:k - 1) {
+        tmp.pam <- pam(dist, i + 1)
+        tmp.width[i] <- tmp.pam$silinfo$avg.width
+    }
+    output.tmp <- as.data.frame(cbind(tmp.clus, tmp.width))
+    names(output.tmp) <- c("numclus", "avg.width")
+    plot(output.tmp[, 1], output.tmp[, 2], xlab = "Number of Clusters", 
+        ylab = "Average Silhouette Width", main = "Average Silhouette Width by Number of Clusters")
+    abline(v = output.tmp$numclus[output.tmp$avg.width == max(output.tmp$avg.width)], 
+        col = 2)
+    output.tmp[order(output.tmp[, 2], decreasing = TRUE), ]
+}
+```
+
+## Function 2: identify.rgl
+
+This function allows for identification of points within a dynamic 3-D ordination diagram. The function can be called to identify any data feature associated with the point that exists in an R object related to the given point, e.g., plot_id. The inputs to the function include the variable of interest to be identified, a nmds points object, and the ordination dimensions of interest.
+
+```{r}
+identify.rgl<-function(env_var,ord,dim1,dim2,dim3)
+{
+tmp<-select3d(button="left")
+tmp.keep<-tmp(ord[,dim1],ord[,dim2],ord[,dim3])
+env_var[tmp.keep=="TRUE"]
+}
+```
+
+## Function 3: const_abund
+veg = long format veg matrix
+pltid = plot id column name
+plnt = plant species name column
+cov = abundance column
+clusvec = clustering dataframe
+clusnum = clustering number of interest
+covthresh = minimum average cover to display
+const_thresh = minimum constancy to display
+
+```{r}
+
+const_abund<-function (veg,clusvec,clusnum,const_thresh=0,cov_thresh=0) 
+{
+  library(tidyverse)
+  library(dplyr)
+  library(labdsv)
+  
+  veg_clus <- veg[clusvec == clusnum,]
+  veg_clus_long <- dematrify(veg_clus)
+  
+  clus_summ <- veg_clus_long %>% 
+    as_tibble() %>%
+      group_by(species) %>%
+        summarize(mean_abundance = mean(abundance, na.rm = TRUE),
+          stdev = sd(abundance, na.rm = TRUE),
+          min_abundance = min(abundance, na.rm = TRUE),
+          max_abundance = max(abundance, na.rm = TRUE),
+          median_abundance=quantile(abundance,probs=0.5),
+          spp_count = n()) 
+
+  clus_count <- clusvec %>%
+    as_tibble() %>%
+      count(value)
+  
+  constancy_percent <- (clus_summ$spp_count/clus_count$n[clus_count$value==clusnum])*100
+  
+  cat("Constancy & Abundance Metrics for Cluster ",clusnum, "\n")
+  
+  clus_summ %>%
+    add_column(constancy_percent) %>%
+      filter(constancy_percent>=const_thresh) %>%
+        filter(mean_abundance>=cov_thresh) %>%
+            arrange(-spp_count, -mean_abundance,species) %>%
+              print(n=10000)
+}
+
+```
+
+## Function 4: "Not In" function
+```{r}
+`%notin%` <- Negate(`%in%`)
+```
+
+
+### Environment and Plant Community data prairie grassland and shrubland
+
+#### Reference vegetation data subset - Loamy Ecosites
+
+```{r}
+
+veg_lm <- read.csv("prairie_loam_ecosites_veg.csv", sep = ",")
+
+dim(veg_lm)
+
+```
+
+### Create vegetation dataframes
+
+```{r}
+
+# raw prominence
+veglm_mat<-matrify(veg_lm[,c(1,2,3)])
+
+dim(veglm_mat)
+```
+
+### Environment and Plant Community data GRASSLAND subset
+
+```{r}
+
+env_lm <- read.csv("prairie_loam_ecosites_env.csv",sep = ",")
+
+# assign row names to the plot number column
+row.names(env_lm)<-env_lm$plant_community_code
+
+# sort the environment dataframe by row.names to match the vegetation data frame
+env_lm <- env_lm[order(env_lm$plant_community_code), ]
+
+identical(row.names(env_lm),row.names(veglm_mat))
+
+cbind(row.names(env_lm),row.names(veglm_mat))
+
+```
+
+#### Ordination analysis
+
+First, we'll transform the abundance data using a normalized transformation, create a dissimilarity matrix, and calculate an NMDS ordination. For purposes of this workshop we will only look at the normalized transformation and Bray/Curtis dissimilarity to save time, but in a real analysis it is standard practice to try several transformation and dissimilarity measures and compare the results using stress plots and select the transformation and dissimilarity metric that minimizes stress.
+
+```{r}
+
+# Normalized abundance transformation
+veglm_norm <-         
+  decostand(veglm_mat, method = "normalize")
+
+# Dissimilarity
+veglm_dist_bc_norm <- vegdist(veglm_norm,method="bray") 
+
+# Normalized prominence
+veglm_mat_nmds_bc_norm <-
+  metaMDS(veglm_dist_bc_norm,
+          distance = "bray",
+          k = 3,
+          maxit = 50, 
+          trymax = 100,
+          wascores = TRUE)
+veglm_mat_nmds_bc_norm
+
+x11()
+stressplot(veglm_mat_nmds_bc_norm,main="Stress Plot for Normalized Cover/Bray-Curtis") # Produces a Shepard's diagram
+
+x11()
+plot(veglm_mat_nmds_bc_norm, "sites",choices = c(1, 2))
+
+```
+
+#### NMDS Ordination and Gradient Analysis
+
+```{r}
+# Calculate species scores
+
+veglm_mat_nmds_bc_norm.spp_scrs <- 
+  sppscores(veglm_mat_nmds_bc_norm) <- veglm_norm
+
+# plot nmds with species scores and plots
+
+sppcount<-colSums(veglm_norm >0)
+sppcover<-colSums(veglm_norm)
+sppadj<-sppcover/sppcount
+
+x11()
+plot(veglm_mat_nmds_bc_norm, type = "n")
+points(veglm_mat_nmds_bc_norm, display = "sites", cex = 0.7, pch=21, col="red", bg="yellow")
+
+orditorp(veglm_mat_nmds_bc_norm, "sp", priority = sppadj, pch="+", pcol="blue")
+
+x11()
+plot(veglm_mat_nmds_bc_norm, type = "n",choices = c(1, 3))
+points(veglm_mat_nmds_bc_norm, display = "sites", ,choices = c(1, 3), cex = 0.7, pch=21, col="red", bg="yellow")
+
+orditorp(veglm_mat_nmds_bc_norm, choices = c(1, 3), "sp", priority = sppadj, pch="+", pcol="blue")
+```
+
+#### Gradient analysis using Generalized Additive Models
+
+```{r}
+x11()
+plot(veglm_mat_nmds_bc_norm, "sites",choices = c(1, 2))
+
+# Elevation - Dimensions 1 and 2
+plot(veglm_mat_nmds_bc_norm, "sites",choices = c(1, 2))
+surf_elev <- ordisurf(veglm_mat_nmds_bc_norm,env_lm$avg_elevation_m, choices = c(1, 2))
+summary(surf_elev)
+
+# Climate Moisture index - Dimensions 1 and 2
+plot(veglm_mat_nmds_bc_norm, "sites",choices = c(1, 2))
+surf_moisture <- ordisurf(veglm_mat_nmds_bc_norm,env_lm$avg_cmi_rcp , choices = c(1, 2))
+summary(surf_moisture)
+
+# Climate Moisture index - Dimensions 1 and 3
+plot(veglm_mat_nmds_bc_norm, "sites",choices = c(1, 3))
+surf_moisture <- ordisurf(veglm_mat_nmds_bc_norm,env_lm$avg_cmi_rcp , choices = c(1, 3))
+summary(surf_moisture)
+
+# Shrub prominence - Dimensions 1 and 2
+plot(veglm_mat_nmds_bc_norm, "sites",choices = c(1, 2))
+surf_shrub <- ordisurf(veglm_mat_nmds_bc_norm,env_lm$shrub_prominence_value , choices = c(1, 2))
+summary(surf_shrub)
+
+```
+
+### Correlation Analysis to assess gradients
+
+```{r}
+# Correlation analysis
+
+veglm_sppcor_log <-
+  cor(veglm_norm,
+      veglm_mat_nmds_bc_norm$points,
+      use = "complete.obs",
+      method = "pearson")
+
+# Sort by NMDS axis
+veglm_sppcor_log <- veglm_sppcor_log[order(veglm_sppcor_log[,1],decreasing = TRUE),] 
+
+```
+
+
+# Save the results to a CSV file for review
+First, create a folder in the working directory to store exported tables.
+```{r}
+
+dir.create(file.path("tables"))
+
+```
+
+Then export the CSV
+```{r}
+write.csv(veglm_sppcor_log, file = "tables/veglm_sppcor_log_PearsonCor.csv")
+
+```
+
+### Cluster Analysis
+
+#### Partitioning Around Medoids - K-medoids clustering - raw abundance data
+
+```{r}
+# Evaluate the average within to between cluster similar ratio (silhouette width) for a variety of cluster numbers
+veglm_norm_pamsel<-pam.select(veglm_dist_bc_norm,k=20)
+veglm_norm_pamsel
+```
+
+Three and six clusters provided the first and second highest average silhouette widths.
+
+Create 3 cluster classification
+```{r}
+
+veglm_norm_pam_3 <- pam(veglm_dist_bc_norm,k=3)
+attributes(veglm_norm_pam_3)
+x11()
+plot(veglm_norm_pam_3)
+
+table(veglm_norm_pam_3$clustering) # number of plots per cluster
+veglm_norm_pam_3$silinfo$avg.width # average silhouette width across all clusters
+veglm_norm_pam_3$silinfo$clus.avg.widths # average silhouette width for each cluster
+
+```
+
+A measure of cluster compactness. The ratio between the minimum inter-cluster distances to the maximum intra-cluster diameter, i.e., the distance between the cluster's two furthest points. Well separated and compact clusters have a higher Dunn's index.
+
+```{r}
+
+veglm_norm_pam_3_dunn <- dunn(veglm_dist_bc_norm,veglm_norm_pam_3$clustering)
+veglm_norm_pam_3_dunn
+```
+
+Create 6 cluster classification
+```{r}
+veglm_norm_pam_6 <- pam(veglm_dist_bc_norm,k=6)
+attributes(veglm_norm_pam_6)
+x11()
+plot(veglm_norm_pam_6)
+
+table(veglm_norm_pam_6$clustering) # number of plots per cluster
+veglm_norm_pam_6$silinfo$avg.width # average silhouette width across all clusters
+veglm_norm_pam_6$silinfo$clus.avg.widths # average silhouette width for each cluster
+
+```
+
+Dunn's index for the 6 cluster classification
+```{r}
+veglm_norm_pam_6_dunn <- dunn(veglm_dist_bc_norm,veglm_norm_pam_6$clustering)
+veglm_norm_pam_6_dunn
+
+```
+
+The 3 cluster classification has a higher Dunn's index indicating more compact better separated clusters than the 6 cluster classification.
+
+At this point, typically the next step would be to evaluate the results of the 3 and 6 cluster classifications against preliminary group and alliance assignments, and using the various statistical tools we learned in the first session, including evaluating environmental trends and gradients across the clusters. For the prairie analysis, there were four preliminary groups assigned in the loam ecosite communities. In the three cluster classification one of the groups was aggregated with another group (indicating floristic similarity) and the six cluster classification aligned reasonably well with the six preliminary alliances. For the purposes of this workshop, we'll focus on the six cluster classification to refine the alliance classification; however, the three cluster classification may still provide insights at the point in the analysis when alliances are being aggregated up to groups. In addition, when selecting the appropriate number of clusters, the number of clusters with the highest average silhouette width may not always provide the best results depending on the objectives of the analysis. I'll often look for a secondary spike in the average silhouette widths plot and select that number of clusters in addition to the number of clusters with the high average silhouette width and evaluate both. Lastly, note that over approximately 10-15 clusters it becomes arduous to review the clustering results and the number of "singleton" clusters tends to increase. The singletons are often outliers that the clustering algorithm will place in their own cluster to increase the silhouette width in other clusters.
+
+#### Explore the six cluster classification
+
+Review Constancy/cover by cluster to evaluate the diagnostic species
+```{r}
+
+## Constancy/cover
+const_abund(veglm_mat,veglm_norm_pam_6$clustering,clusnum = 1,cov_thresh=0,const_thresh=40)
+
+```
+
+
+Indicator Species Analysis to evaluate the fidelity and specificity of species within the clusters
+```{r}
+veglm_norm_pam_6_ind<- multipatt(veglm_mat,veglm_norm_pam_6$clustering, 
+                    control = how(nperm=100)) 
+summary(veglm_norm_pam_6_ind, indvalcomp=TRUE)
+
+```
+
+
+Partition analysis to evaluate the within-cluster similarity and the organize the clusters into broader classes (i.e., preliminary groups) based on the between-cluster similarity. 
+```{r}
+
+veglm_norm_pam_6_part <- partana(veglm_norm_pam_6$clustering,veglm_dist_bc_norm)
+
+plot(veglm_norm_pam_6_part)
+
+# Export the cluster to cluster similarity dataframe
+write.csv(veglm_norm_pam_6_part$ctc,file='tables/veglm_norm_pam_6_part$ctc.csv')
+
+# Export the plot to cluster similarity dataframe
+
+# Assign row names using the plot numbers from the environment dataframe
+row.names(veglm_norm_pam_6_part$ptc)<-row.names(env_lm)
+
+# combined the clustering results 
+
+veglm_norm_pam_6_part$ptc<-cbind(veglm_norm_pam_6_part$ptc,veglm_norm_pam_6$clustering)
+
+# assign column names
+
+veglm_norm_pam_6_part$ptc <- as.data.frame(veglm_norm_pam_6_part$ptc)
+names(veglm_norm_pam_6_part$ptc) <- c("Clus_1","Clus_2","Clus_3","Clus_4","Clus_5","Clus_6","Clustering")
+
+# Save to a CSV file
+write.csv(veglm_norm_pam_6_part$ptc,file='tables/veglm_norm_pam_6_part$ptc.csv')
+
+```
+
+Create a column in the environment matrix to store the PAM cluster results
+```{r}
+env_lm <- env_lm %>%
+            mutate(veglm_norm_pam_6 = veglm_norm_pam_6$clustering)
+names(env_lm)
+
+```
+
+
+#### Noise Clustering
+Noise clustering is type of fuzzy partitioning clustering technique. Recognizes outliers as objects with a high dissimilarity to all “true” clusters and places these in a noise cluster. In vegetation science this is useful for identifying outliers (e.g., rare or under-sampled vegetation type) or successional types. Other partitioning methods will fit outliers into true clusters or will create what is essentially a noise cluster. Noise clustering uses distance as the similarity metric (not bounded between 0 and 1).
+
+```{r}
+
+# Run the noise clustering function
+veglm_norm_noise.nc6 = vegclust(x = veglm_norm, mobileCenters=6, 
+                       method="NC", m=1.2, dnoise = 0.8, nstart=50) 
+
+```
+
+The above code uses the fuzzy centroids method (method = "NC"); to use fuzzy medoids use the method NCdd. The noise clustering function provides an number of options that can be adjusted. Following is a short description of each from :
+
+* mobileCenters = the number of clusters
+* method = the type of fuzzy clustering method (e.g., centroid)
+* m = fuzziness exponent (the larger this number the fuzzier the results will be, if this is set too  large [e.g., 10] the results are uninformative as cluster membership will be approximately equal across all clusters for a given sample)
+* dnoise = distance to the noise class (samples greater than this value from all true clusters will be assigned to the noise cluster)
+* nstart = the number of clustering runs using different centroid locations, the function will select the result with the lowest cluster variance 
+
+The above information is from [How to use the vegclust package](https://cran.r-project.org/web/packages/vegclust/vignettes/VegetationClassification.html) by Miquel De Cáceres and Susan Wiser.
+
+Defuzzify using an alpha threshold
+```{r}
+
+defuzz_thresh80_veglm_nc6 <- defuzzify(veglm_norm_noise.nc6 ,method="cut",alpha = 0.8)
+defuzz_thresh80_veglm_nc6$cluster
+table(defuzz_thresh80_veglm_nc6$cluster,useNA = "always")
+```
+
+A crisp clustering result can be obtained from the fuzzy clustering object using the defuzzify function. In this case we are using an alpha threshold to assign samples to a cluster. The alpha is a fuzzy membership value (between 0 and 1). The cluster for a which sample has a fuzzy membership value greater than or equal to the specified alpha value is the cluster that the sample will be assigned to. Samples that don't have a fuzzy membership greater than or equal to the specified will be assigned to an NA cluster. This can be informative to when assessing which fuzziness exponent to use (if too many samples are assigned to NA then reduce the exponent) and also when evaluating the results, you can easily filter out which samples didn't have a particularly high fuzzy membership. There is no one best alpha value to set and it's worth experimenting with a couple of alpha values for your data set before settling on one to use for your analysis.
+
+Defuzzify using the maximum alpha value
+```{r}
+defuzz_maxalpha_veglm_nc6 <- defuzzify(veglm_norm_noise.nc6)
+defuzz_maxalpha_veglm_nc6$cluster
+table(defuzz_maxalpha_veglm_nc6$cluster)
+
+```
+
+A crisp clustering result can also be obtained by assigning a cluster to each sample based on the maximum fuzzy membership value. Using the maximum membership value approach all samples are assigned a cluster and there are no NAs.
+
+Compile the PAM and noise clustering results and export to a CSV file
+```{r}
+# sort the PAM 6-cluster silhouette info by plant community to match the order of the noise clustering results
+veglm_norm_pam_6_sil <- veglm_norm_pam_6$silinfo$widths[order(row.names(veglm_norm_pam_6$silinfo$widths)), ]
+
+# combined environment data with the clustering results into a data frame
+clus_results_veglm_nc6<-cbind(env_lm$group_code_march_2025,env_lm$alliance_code_march_2025, env_lm$ecoregion, env_lm$agg_ecosite_title, env_lm$plant_community_code, env_lm$plant_community_name_scientific, env_lm$shrub_prominence_value, round(veglm_norm_noise.nc6$mem, dig=3),defuzz_thresh80_veglm_nc6$cluster,defuzz_maxalpha_veglm_nc6$cluster,veglm_norm_pam_6_sil)
+
+names(clus_results_veglm_nc6)
+
+# rename the column names in the clustering results data frame to more succinct names
+colnames(clus_results_veglm_nc6) <- c("group", "alliance", "ecoregion","ecosite", "plant_community_code", "plant_community_title","total_shrub_prominence", "M1", "M2", "M3", "M4", "M5", "M6", "N", "thresh80_cluster", "maxalpha_cluster", "pam_cluster", "pam_neighbor", "pam_silwidth")
+
+names(clus_results_veglm_nc6)
+
+# save the results to a CSV file
+write.csv(clus_results_veglm_nc6,file='tables/clus_results_veglm_nc6.csv',row.names = FALSE)
+
+```
+
+Going forward, for the purposes of the workshop please refer to the clus_results_veg_lm_nc6.xlsx file for the clustering results so that we can all follow along with same examples. This is because using the centroid approach with noise clustering results in a slightly different clustering result each time due to different centroid random starting positions. 
+
+#### Create a column in the environment matrix to store the noise cluster results
+```{r}
+# Do not run this, see the veglm_nc6 column in the env_lm dataframe instead
+
+#env_lm <- env_lm %>%
+#            mutate(veglm_nc6 = defuzz_maxalpha_veglm_nc6$cluster)
+#names(env_lm)
+
+```
+
+Compare the PAM and Noise Cluster Results
+```{r}
+# PAM clusters
+clustvar(veglm_dist_bc_norm,env_lm$veglm_norm_pam_6)
+
+# Average variance
+mean(clustvar(veglm_dist_bc_norm,env_lm$veglm_norm_pam_6))
+
+# Noise clusters
+clustvar(veglm_dist_bc_norm,env_lm$veglm_nc6)
+
+# Average variance
+mean(clustvar(veglm_dist_bc_norm,env_lm$veglm_nc6))
+
+# Avg. variance excluding the noise cluster
+mean(clustvar(veglm_dist_bc_norm,env_lm$veglm_nc6)[1:6])
+
+```
+
+It can be useful in some cases to convert the noise cluster categories to integer values.
+```{r}
+
+## Add another column for the noise cluster results and convert the cluster categories to integers
+
+env_lm <- env_lm %>%
+            mutate(veglm_nc6_int = case_when(
+              veglm_nc6 == "M1" ~ 1,
+              veglm_nc6 == "M2" ~ 2,
+              veglm_nc6 == "M3" ~ 3,
+              veglm_nc6 == "M4" ~ 4,
+              veglm_nc6 == "M5" ~ 5,
+              veglm_nc6 == "M6" ~ 6,
+              veglm_nc6 == "N" ~ 999
+              )
+            )
+
+names(env_lm)
+
+```
+
+#### Explore the noise clusters
+Evaluating the noise clusters for the floristic composition and environment patterns and gradients. In practice, you'll also want to compare the floristic composition of the clusters between the two cluster analysis results (PAM and noise clustering) with a focus on diagnostic species. 
+```{r}
+
+## Constancy/cover
+const_abund(veglm_mat,env_lm$veglm_nc6,clusnum = "M1",cov_thresh=0,const_thresh=60)
+
+## Indicator Species Analysis - multi pattern analysis
+veglm_nc6_ind<- multipatt(veglm_mat,env_lm$veglm_nc6, 
+                    control = how(nperm=100)) 
+summary(veglm_nc6_ind, indvalcomp=TRUE)
+
+## Indicator Species Analysis - Dufrene-Legendre
+
+veglm_nc6_indduf <- indval(veglm_mat,env_lm$veglm_nc6_int ) # passing the noise clustering integer column that we created above
+
+# Long summary
+summary(veglm_nc6_indduf, p=0.05, type='short')
+
+# Short summary
+summary(veglm_nc6_indduf, p=0.05, type='long', digits=2, show=0.40, sort=FALSE, too.many=100)
+
+## Partition analysis
+veglm_nc6_part <- partana(env_lm$veglm_nc6,veglm_dist_bc_norm)
+plot(veglm_nc6_part)
+write.csv(veglm_nc6_part$ctc,file='tables/veglm_nc6_part$ctc.csv')
+
+## Next evaluate the partition analysis results spreadsheet
+
+## Review the vegetation in a specific vegetation community in the noise cluster 
+veg_lm %>% 
+  as_tibble() %>%
+        dplyr::select(plant_community_code, analysis_name,prominence_value,constancy_percent) %>%
+          filter(plant_community_code %in% c("CU-LM-A")) %>%
+            arrange(desc(prominence_value),analysis_name) %>%
+              print(n=30)
+
+```
+
+# Box plots by cluster
+
+```{r}
+
+# Convert the newly created cluster results column to a factor
+env_lm$veglm_nc6<-as.factor(env_lm$veglm_nc6) 
+
+# Elevation - when deciding between two cluster analysis results, comparing ranges of environmental attributes is also an important step
+x11()
+boxplot(env_lm$avg_elevation_m ~ env_lm$veglm_nc6) #  Noise clusters
+
+x11()
+boxplot(env_lm$avg_elevation_m ~ env_lm$veglm_norm_pam_6) # Noise clusters
+
+# Moisture index
+x11()
+boxplot(env_lm$avg_cmi_rcp ~ env_lm$veglm_nc6)
+
+# Growing degree days
+x11()
+boxplot(env_lm$avg_gdd_05_1991_2020 ~ env_lm$veglm_nc6)
+
+# Shrub prominence
+x11()
+boxplot(env_lm$shrub_prominence_value ~ env_lm$veglm_nc6)
+
+# Cacti prominence
+x11()
+boxplot(env_lm$cacti_prominence_value ~ env_lm$veglm_nc6)
+
+```
+
+#### Ecoregion and clusters cross tabulation
+```{r}
+
+table(env_lm$ecoregion,env_lm$veglm_nc6)
+
+```
+
+### Plot a dynamic ordination and symbolize the clusters
+
+```{r}
+veglm_mat_nmds_bc_norm_rgl <-ordirgl(veglm_mat_nmds_bc_norm, radius = .005, color="black")
+
+orglpoints(veglm_mat_nmds_bc_norm$points[env_lm$veglm_nc6=="M1",],display="sites",color="red",radius=.010) 
+orglpoints(veglm_mat_nmds_bc_norm$points[env_lm$veglm_nc6=="M2",],display="sites",color="yellow",radius=.010) 
+orglpoints(veglm_mat_nmds_bc_norm$points[env_lm$veglm_nc6=="M3",],display="sites",color="green",radius=.010) 
+orglpoints(veglm_mat_nmds_bc_norm$points[env_lm$veglm_nc6=="M4",],display="sites",color="blue",radius=.010) 
+orglpoints(veglm_mat_nmds_bc_norm$points[env_lm$veglm_nc6=="M5",],display="sites",color="cyan",radius=.010) 
+orglpoints(veglm_mat_nmds_bc_norm$points[env_lm$veglm_nc6=="M6",],display="sites",color="magenta",radius=.010) 
+orglpoints(veglm_mat_nmds_bc_norm$points[env_lm$veglm_nc6=="N",],display="sites",color="gray",radius=.010) 
+
+identify.rgl(row.names(env_lm), veglm_mat_nmds_bc_norm$points, 1,2,3)
+
+identify3d(veglm_mat_nmds_bc_norm$point,labels = row.names(env_lm))  # Place your cursor on a point in the dynamic ordination, press the right mouse button to identify, and hit Esc to quit
+
+```
+
+### Review the cluster results
+This section provides some examples of the process of using the data analysis results along with expert review to refine the clustering and develop preliminary alliance concepts.
+
+#### Evaluating communities assigned to the noise cluster
+
+M1 and  "LM1-APAD"; example and Festuca hallii - Hesperostipa_spartea
+```{r}
+
+veg_lm %>% 
+  as_tibble() %>%
+        dplyr::select(plant_community_code, analysis_name,prominence_value,constancy_percent) %>%
+          filter(plant_community_code %in% c("LM1-APAD")) %>%
+            arrange(desc(prominence_value),analysis_name) %>%
+              print(n=20)
+
+# Evaluate the constance/abundance of M1
+const_abund(veglm_mat,env_lm$veglm_nc6,clusnum = "M1",cov_thresh=0,const_thresh=20)
+
+# Evaluate the ordination and identify where this community is located and which plots are nearby (i.e., floristically similar)
+
+identify3d(veglm_mat_nmds_bc_norm$point,labels = row.names(env_lm))
+
+identify.rgl(row.names(env_lm), veglm_mat_nmds_bc_norm$points, 1,2,3)
+
+
+# Evaluating LM1-APAD with a subset of cluster M1 using sorted tables- Festuca hallii - Hesperostipa_spartea
+
+vegtab(veglm_mat,row.names(veglm_mat) %in% c("LM1-APAD",  "LM12-APAD" ,"LM8-APAD" ),minval=2,pltord = -veglm_mat$Hesperostipa_spartea) 
+
+table(env_lm$ecoregion[row.names(veglm_mat) %in% c("LM1-APAD",  "LM12-APAD" ,"LM8-APAD" )]) # which ecoregions are the 3 communities located in?
+
+# Evaluating the remaining plots in M1 Festuca_hallii-Hesperostipa_curtiseta
+
+vegtab(veglm_mat[,names(veglm_mat) %in% c("Hesperostipa_spartea","Festuca_hallii")],row.names(veglm_mat) %in% c("AP-LM-A","CPA25", "CPA3", "CPC29","MGA1","NFA01", "NFC01"),minval=0,pltord = -veglm_mat$Hesperostipa_spartea)  
+
+table(env_lm$ecoregion[row.names(veglm_mat) %in% c("AP-LM-A","CPA25", "CPA3", "CPC29","MGA1","NFA01", "NFC01")])
+
+```
+
+Community LM1-APAD (Festuca hallii – Hesperostipa spartea / Hesperostipa curtiseta) was assigned to the noise cluster. The fuzzy membership of LM1-APAD is highest for the noise cluster and next highest for cluster M1. In the ordination we can see that the LM1-APAD is closest to two communities from cluster M1. Evaluating the floristic composition using sorted tables and constancy/cover of LM1-APAD with the subset of communities from M1 we see that **Hesperostipa spartea** and **Festuca hallii** are prominent species compared to the remaining plots in cluster M1 in which **Festuca hallii** is the most prominent species. We also see that LM1-APAD and subset of communities from M1 that are most similar are all from the Aspen Parkland/Assiniboine Delta region of Manitoba while the other M1 communities are from Aspen Parkland in Saskatchewan and Alberta. From this we can conclude that the 3 communities from Manitoba could become their own preliminary alliance.
+              
+M6 and CPA11 example
+```{r}
+
+veg_lm %>% 
+  as_tibble() %>%
+        dplyr::select("plant_community_code","analysis_name","prominence_value","constancy_percent") %>%
+          filter(plant_community_code %in% c("CPA11")) %>%
+            arrange(desc(prominence_value),analysis_name) %>%
+              print(n=40)
+
+# Evaluate the constance/abundance of M6
+const_abund(veglm_mat,env_lm$veglm_nc6,clusnum = "M6",cov_thresh=0,const_thresh=20)
+
+# Indicator species
+summary(veglm_nc6_indduf, p=0.05, type='short')
+
+```
+
+Community CPA11 Stipa comata/Artemisia frigida-Selaginella densa) was assigned to the noise cluster. The fuzzy membership of CPA11 is highest for the noise cluster and next highest for cluster M6. Evcaluating the fuzzy membership and species composition of CPA11 against the constancy/cover and indicator species of cluster M6 we can see that M6 is a reasonably good fit. Therefore, CPA11 will be reclassified into M6. We can repeat this for other communities in the noise cluster in an attempt to place them in the cluster where they fit best.
+
+#### Evaluating communities assigned to NA based on the fuzzy membership threshold; MGA21 example 
+```{r}
+# review the vegetation composition data for MGA21 - assigned to cluster M2 but the fuzzy membership is below the alpha threshold
+veg_lm %>% 
+  as_tibble() %>%
+        dplyr::select("plant_community_code","analysis_name","prominence_value","constancy_percent" ) %>%
+          filter(plant_community_code %in% c("MGA21")) %>%
+            arrange(desc(prominence_value),analysis_name) %>%
+              print(n=20)
+
+# Constany/abundance for M2
+const_abund(veglm_mat,env_lm$veglm_nc6,clusnum = "M2",cov_thresh=0,const_thresh=60)
+
+# Constancy/abundance for M6
+const_abund(veglm_mat,env_lm$veglm_nc6,clusnum = "M6",cov_thresh=0,const_thresh=60)
+
+table(env_lm$ecoregion,env_lm$veglm_nc6)
+
+summary(veglm_nc6_indduf, p=0.05, type='short')
+
+```
+
+MGA21 is an example  of a community that was flagged as an NA using the alpha (fuzzy membership value) threshold of 0.80. It's highest membeship is in M2, and the second highest in M6. Pascopyrum_smithii is the dominant grass in MGA21 and this grass is a moderate indicator of cluster M2. MGA21 also has both Hesperostipa_curtiseta and Hesperostipa_comata as prominent grasses and based on the constancy/cover of M2 and M6 the cover of Hesperostipa_curtiseta is on the low end and Hesperostipa_comata is on the high end for these species in cluster M2. We can also see that most of communities in M2 are located in the Mesic Mixed Grass ecoregion as is MGA21. Based on this, for now we will leave MGA21 in cluster M2 but will make note of the "mixed" membership of this community in M1 and M6.  
+
+#### Evaluating clusters based on ecoregion and indicator species; M2 and FFA27 example  
+```{r}
+
+# review the vegetation in specific vegetation communities
+veg_lm %>% 
+  as_tibble() %>%
+        dplyr::select("plant_community_code","analysis_name","prominence_value","constancy_percent") %>%
+          filter(plant_community_code %in% c("FFA27")) %>%
+            arrange(desc(prominence_value),analysis_name) %>%
+              print(n=40)
+
+const_abund(veglm_mat,env_lm$veglm_nc6,clusnum = "M2",cov_thresh=0,const_thresh=60)
+
+const_abund(veglm_mat,env_lm$veglm_nc6,clusnum = "M3",cov_thresh=0,const_thresh=60)
+
+summary(veglm_nc6_ind, indvalcomp=TRUE)
+
+table(env_lm$ecoregion,env_lm$veglm_nc6)
+
+```
+
+Community FFA27 was classified into cluster M2 but is the only community in that cluster in the Foothill Fescue ecoregion. Looking at the species list for FFA27 we can see that Elymus lanceolatus, Nassella viridula, and Hesperostipa curtiseta are the most prominent and constant grasses, but Festuca campestris is also present in about half of the plots in this community and when present has moderate prominence. Festuca campestris is an important indicator of cluster M3. Based on the ecoregion and indicator species, this community will be reclassifed to cluster M3.
+
+#### Evaluating clusters and communities using shrub prominent
+```{r}
+
+# Example using "CPC29", "NFC01","NFC06","CU-LM-A"
+
+boxplot(env_lm$shrub_prominence_value ~ env_lm$veglm_nc6,main = "Boxplot of Shrub Prominence by Noise Cluster")
+
+# Sorted table for cluster M1 - sorted by shrub prominence (descending)
+
+vegtab(veglm_mat[,names(veglm_mat) %in% c("Festuca_hallii","Symphoricarpos_occidentalis","Artemisia_frigida","Rosa_arkansana","Salix_bebbiana","Salix_petiolaris","Rosa_acicularis","Elaeagnus_commutata", "Amelanchier_alnifolia","Rosa_woodsii","Artemisia_cana")],env_lm$veglm_nc6=="M1",minval=1,pltord = -env_lm$shrub_prominence_value) 
+
+# review the vegetation in specific vegetation communities - Shrub dominated communities, CPC29
+veg_lm %>% 
+  as_tibble() %>%
+        dplyr::select("plant_community_code","analysis_name","prominence_value","constancy_percent") %>%
+          filter(plant_community_code %in% c("CPC29")) %>%
+            arrange(desc(prominence_value),analysis_name) %>%
+              print(n=30)
+
+const_abund(veglm_mat,env_lm$veglm_nc6,clusnum = "M1",cov_thresh=0,const_thresh=60)
+
+const_abund(veglm_mat,env_lm$veglm_nc6,clusnum = "M4",cov_thresh=0,const_thresh=60)
+
+summary(veglm_nc6_ind, indvalcomp=TRUE)
+
+# review the vegetation in specific vegetation communities - Shrub dominated communities, CU-LM-A
+veg_lm %>% 
+  as_tibble() %>%
+        dplyr::select("plant_community_code","analysis_name","prominence_value","constancy_percent") %>%
+          filter(plant_community_code %in% c("CU-LM-A")) %>%
+            arrange(desc(prominence_value),analysis_name) %>%
+              print(n=30)
+
+
+```
+
+Based on the constancy/cover of cluster M4, we know that this cluster represents shrub-dominanted communities with Festuca hallii on loam ecosites; therefore, the relatively high promience of shrubs in this cluster is to be expected. However, cluster M1, M2, M3, M5 and the noise cluster include communities that are outliers in terms of shrub prominence. By exploring those clusters using sorted tables and evaluating the species composition of the communities with high shrub cover relative to the species composition and diagnostic species in the shrub-dominated cluster M4 we can make decisions about reclassifying shrub dominated communities to aggregate these with cluster M4. 
+
+For instance, in cluster M1, community CPC29 (Symphoricarpos occidentalis/Festuca hallii) has the highest total shrub prominence and the two most prominent shrubs are Symphoricarpos occidentalis and Elaeagnus commutata. We can also see that Elaeagnus_commutata is a strong indicator of cluster M4, therefore we can conclude that CPC29 should be reclassified to cluster M4.  This same review process would be completed for all cluster with communities with high shrub cover.
+
+In the noise cluster, community CU-LM-A has the high shrub prominence of all communities on loam ecosites. The community is also dominated by Dasiphora fruticosa with Festuca hallii, and D. fruitocosa in the loam ecosites is rare, especially as a dominant. Therefore we will keep this community in the noise cluster to flag it as an outlier for now. Likely this community will get placed in a Festuca hallii alliance and this is something that should be discussed with the expert review panel and evaluated after the alliance and group classifications have been refined.  
+
+### Create revised clustering based on quantitative results and expert review
+
+```{r}
+
+# add a preliminary alliance column to the environment dataframe
+env_lm <- env_lm %>%
+            mutate(alliance_prelim = veglm_nc6)
+names(env_lm)
+
+# assign preliminary alliances, assign codes that reflect preliminary groups and alliances from the partition analysis and ordered environmental gradients (moisture index) from the box plots
+env_lm <- env_lm %>%
+            mutate(alliance_prelim = case_when(
+              veglm_nc6 == "M1" ~ "03.1_feshal_alli",
+              veglm_nc6 == "M2" ~ "02_hescur_alli",
+              veglm_nc6 == "M3" ~ "04_fescam",
+              veglm_nc6 == "M4" ~ "03.3_elacom_feshal_alli",
+              veglm_nc6 == "M5" ~ "03.2_feshal_hescur_alli",
+              veglm_nc6 == "M6" ~ "01_hescom_alli",
+              veglm_nc6 == "N" ~ "Noise"
+              )
+            )
+
+table(env_lm$alliance_prelim)
+
+# reassign communities to preliminary alliances
+env_lm <- env_lm %>%
+            mutate(alliance_prelim = case_when(
+              plant_community_code == "CPA11" ~ "01_hescom_alli", # reassign based on fuzzy membership
+              plant_community_code == "CPA6" ~ "03.2_feshal_hescur_alli", # reassign based on fuzzy membership
+              plant_community_code == "FFA27" ~ "04_fescam", # reassign FFA27 based on ecoregion and indicator species
+              plant_community_code %in% c("CPC29", "NFC01","NFC06") ~ "03.3_elacom_feshal_alli", # reassign communities with high shrub cover
+              plant_community_code %in% c("LM1-APAD","LM12-APAD","LM8-APAD") ~"03.4_feshal_hesspa", # create a new alliance for feshal-hesspa
+              .default = alliance_prelim
+              )
+            )
+
+table(env_lm$alliance_prelim)
+
+```
+
+### Evaluate the preliminary alliances
+
+```{r}
+
+const_abund(veglm_mat,env_lm$alliance_prelim,clusnum = "01_hescom_alli",cov_thresh=0,const_thresh=60)
+
+const_abund(veglm_mat,defuzz_maxalpha_veglm_nc6$cluster,clusnum = "M6",cov_thresh=0,const_thresh=60)
+
+# Merge two preliminary alliances?
+# Review constancy/cover, diagnostic species, partition analysis, and ordination
+const_abund(veglm_mat,env_lm$alliance_prelim,clusnum = "03.1_feshal_alli",cov_thresh=0,const_thresh=60)
+
+const_abund(veglm_mat,env_lm$alliance_prelim,clusnum = "03.2_feshal_hescur_alli",cov_thresh=0,const_thresh=60)
+
+
+```
+
+```{r}
+## Indicator Species Analysis
+veglm_prelim_alli_ind<- multipatt(veglm_mat,env_lm$alliance_prelim, 
+                    control = how(nperm=100)) 
+summary(veglm_prelim_alli_ind, indvalcomp=TRUE)
+
+## Partition analysis
+veglm_prelim_alli_part <- partana(env_lm$alliance_prelim,veglm_dist_bc_norm)
+plot(veglm_prelim_alli_part)
+write.csv(veglm_prelim_alli_part $ctc,file='tables/veglm_prelim_alli_part $ctc.csv')
+
+```
+
+#### merge two preliminary alliances
+```{r}
+
+env_lm <- env_lm %>%
+            mutate(alliance_prelim = case_when(
+              alliance_prelim == "03.2_feshal_hescur_alli" ~ "03.1_feshal_alli",
+              .default = alliance_prelim
+              )
+            )
+
+table(env_lm$alliance_prelim)
+```
+
+#### Box plots by preliminary alliance
+
+```{r}
+
+# Convert the newly created preliminary alliance results column to a factor
+env_lm$alliance_prelim <-as.factor(env_lm$alliance_prelim) 
+
+# Elevation
+x11()
+boxplot(env_lm$avg_elevation_m ~ env_lm$alliance_prelim)
+
+# Moisture index
+x11()
+boxplot(env_lm$avg_cmi_rcp ~ env_lm$alliance_prelim)
+
+# Growing degree days
+x11()
+boxplot(env_lm$avg_gdd_05_1991_2020 ~ env_lm$alliance_prelim)
+
+# Shrub prominence
+x11()
+boxplot(env_lm$shrub_prominence_value ~ env_lm$alliance_prelim)
+
+# Cacti prominence
+x11()
+boxplot(env_lm$cacti_prominence_value ~ env_lm$alliance_prelim)
+
+```
+
+### Plot a dynamic ordination and symbolize the preliminary alliances for review
+
+```{r}
+veglm_mat_nmds_bc_norm_rgl <-ordirgl(veglm_mat_nmds_bc_norm, radius = .005, color="black")
+
+orglpoints(veglm_mat_nmds_bc_norm$points[env_lm$alliance_prelim=="01_hescom_alli",],display="sites",color="red",radius=.010) 
+orglpoints(veglm_mat_nmds_bc_norm$points[env_lm$alliance_prelim=="02_hescur_alli",],display="sites",color="yellow",radius=.010) 
+orglpoints(veglm_mat_nmds_bc_norm$points[env_lm$alliance_prelim=="03.1_feshal_alli",],display="sites",color="blue",radius=.010) 
+orglpoints(veglm_mat_nmds_bc_norm$points[env_lm$alliance_prelim=="03.3_elacom_feshal_alli",],display="sites",color="cyan",radius=.010) 
+orglpoints(veglm_mat_nmds_bc_norm$points[env_lm$alliance_prelim=="03.4_feshal_hesspa",],display="sites",color="purple",radius=.010) 
+orglpoints(veglm_mat_nmds_bc_norm$points[env_lm$alliance_prelim=="04_fescam",],display="sites",color="magenta",radius=.010) 
+orglpoints(veglm_mat_nmds_bc_norm$points[env_lm$alliance_prelim=="Noise",],display="sites",color="gray",radius=.010) 
+
+identify.rgl(row.names(env_lm), veglm_mat_nmds_bc_norm$points, 1,2,3)
+
+```
+
+At the end you should have a preliminary group and alliance classification for loamy ecosites. An essential component of the process is expert review throughout the process or at least at important milestones (e.g., completion of version 1 of the preliminary alliance classification). Documenting your work along the way, including assumptions, files (figures and table output), and decision points, is an essential part of the analysis workflow. Once you've worked through similar analyses for the other ecosites you can analyze communities from all of the ecosites together to assess, review, and refine the group classification. Following refinement of the group classification, alliances within each will need to be adjusted to account for communities that changed groups or potentially new groups that were identified in the process. The group analysis would follow a similar workflow as above starting with ordination and gradient analysis, cluster analysis followed by reviewing the clusters and comparing the preliminary groups against the cluster assignments, environmental and floristic summaries, partition analysis, and indicator species analysis. Throughout the analysis some plant communities will be moved between preliminary groups, and the group summaries rerun to determine if the changes improved the various metrics (e.g., constancy/cover) as we did above for the alliance classification. 
+
+For the purposes of the workshop, we'll simply characterize the group assignments, which are the final group assignments following the Canadian prairie work in 2024 and early 2025. 
+
+#### Reference GRASSLAND subset - Upland Grasslands
+
+```{r}
+    veg <- read.csv("prairie_veg.csv",sep = ",")
+                                        
+dim(veg)
+
+```
+
+### Create vegetation dataframes
+
+```{r}
+
+# raw prominence
+veg_mat<-matrify(veg[,c(1,2,3)])
+
+dim(veg_mat)
+```
+
+### Environment and Plant Community data GRASSLAND subset
+
+```{r}
+
+env <- read.csv("prairie_env.csv", sep = ",")
+
+dim(env)
+
+# assign row names to the plot number column
+row.names(env)<-env$plant_community_code
+
+# sort the environment dataframe by row.names to match the vegetation data frame
+env <- env[order(env$plant_community_code), ]
+
+identical(row.names(env),row.names(veg_mat))
+
+cbind(row.names(env),row.names(veg_mat))
+
+```
+
+First, we'll create a dissimilarity matrix and calculate an NMDS ordination
+
+```{r}
+
+# Normalized abundance transformation
+veg_norm <-         
+  decostand(veg_mat, method = "normalize")
+
+# Dissimilarity
+veglm_dist_bc_norm <- vegdist(veg_norm,method="bray") 
+
+# Normalized prominence
+veg_mat_nmds_bc_norm <-
+  metaMDS(veglm_dist_bc_norm,
+          distance = "bray",
+          k = 5,
+          maxit = 50, 
+          trymax = 100,
+          wascores = TRUE)
+veg_mat_nmds_bc_norm
+
+stressplot(veg_mat_nmds_bc_norm,main="Stress Plot for Normalized Cover/Bray-Curtis") # Produces a Shepard's diagram
+
+x11()
+plot(veg_mat_nmds_bc_norm, "sites",choices = c(1, 2))
+
+plot(veg_mat_nmds_bc_norm, "sites",choices = c(1, 3))
+```
+
+### NMDS Ordination and Gradient Analysis
+
+```{r}
+# Calculate species scores
+
+veg_mat_nmds_bc_norm.spp_scrs <- 
+  sppscores(veg_mat_nmds_bc_norm) <- veg_norm
+
+# plot nmds with species scores and plots
+
+sppcount_pr<-colSums(veg_norm >0)
+sppcover_pr<-colSums(veg_norm)
+sppadj_pr<-sppcover_pr/sppcount_pr
+
+x11()
+plot(veg_mat_nmds_bc_norm, type = "n")
+points(veg_mat_nmds_bc_norm, display = "sites", cex = 0.7, pch=21, col="red", bg="yellow")
+
+orditorp(veg_mat_nmds_bc_norm, "sp", priority = sppadj_pr, pch="+", pcol="blue")
+
+x11()
+plot(veg_mat_nmds_bc_norm, type = "n",choices = c(1, 3))
+points(veg_mat_nmds_bc_norm, display = "sites", ,choices = c(1, 3), cex = 0.7, pch=21, col="red", bg="yellow")
+
+orditorp(veg_mat_nmds_bc_norm, choices = c(1, 3), "sp", priority = sppadj_pr, pch="+", pcol="blue")
+
+# Generalized Additive Models
+x11()
+plot(veg_mat_nmds_bc_norm, "sites",choices = c(1, 2))
+
+# Elevation - Dimensions 1 and 2
+plot(veg_mat_nmds_bc_norm, "sites",choices = c(1, 2))
+surf_pr_elev <- ordisurf(veg_mat_nmds_bc_norm,env$avg_elevation_m, choices = c(1, 2))
+summary(surf_pr_elev)
+
+# Moisture index - Dimensions 1 and 2
+plot(veg_mat_nmds_bc_norm, "sites",choices = c(1, 2))
+surf_pr_moisture <- ordisurf(veg_mat_nmds_bc_norm,env$avg_cmi_rcp , choices = c(1, 2))
+summary(surf_pr_moisture)
+
+# Moisture index - Dimensions 1 and 3
+plot(veg_mat_nmds_bc_norm, "sites",choices = c(1, 3))
+surf_pr_moisture <- ordisurf(veg_mat_nmds_bc_norm,env$avg_cmi_rcp , choices = c(1, 3))
+summary(surf_pr_moisture)
+
+# Shrub prominence - Dimensions 1 and 2
+plot(veg_mat_nmds_bc_norm, "sites",choices = c(1, 2))
+surf_pr_shrub <- ordisurf(veg_mat_nmds_bc_norm,env$shrub_prominence_value , choices = c(1, 2))
+summary(surf_pr_shrub)
+
+```
+
+### Correlation Analysis
+
+```{r}
+# Correlation analysis
+
+veg_sppcor_log <-
+  cor(veg_norm,
+      veg_mat_nmds_bc_norm$points,
+      use = "complete.obs",
+      method = "pearson")
+
+# Sort by NMDS axis
+veg_sppcor_log <- veg_sppcor_log[order(veg_sppcor_log[,1],decreasing = TRUE),] 
+
+# Save the results to a CSV file for review
+write.csv(veg_sppcor_log, file = "tables/veg_sppcor_log_PearsonCor.csv")
+
+
+```
+
+### Reviewing the groups
+
+####  Box plots by cluster
+
+```{r}
+# Convert the newly created cluster results column to a factor
+group_code_march_2025<-as.factor(env$group_code_march_2025) 
+
+# Elevation
+x11()
+boxplot(env$avg_elevation_m ~ env$group_code_march_2025)
+
+# Moisture index
+
+boxplot(env$avg_cmi_rcp ~ env$group_code_march_2025)
+
+# Growing degree days
+
+boxplot(env$avg_gdd_05_1991_2020 ~ env$group_code_march_2025)
+
+# Shrub prominence
+
+boxplot(env$shrub_prominence_value ~ env$group_code_march_2025)
+
+# Cacti prominence
+
+boxplot(env$cacti_prominence_value ~ env$group_code_march_2025)
+
+```
+
+#### Ecosites
+
+```{r}
+
+table(env$agg_ecosite_title, env$group_code_march_2025)
+
+```
+
+# Explore the prairie upland grassland and shrubland groups
+```{r}
+
+table(env$group_code_march_2025)
+
+## Constancy/cover
+const_abund(veg_mat,env$group_code_march_2025,clusnum = "G075",cov_thresh=1,const_thresh=40)
+const_abund(veg_mat,env$group_code_march_2025,clusnum = "G141",cov_thresh=1,const_thresh=40)
+const_abund(veg_mat,env$group_code_march_2025,clusnum = "G273",cov_thresh=1,const_thresh=40)
+const_abund(veg_mat,env$group_code_march_2025,clusnum = "G331",cov_thresh=1,const_thresh=40)
+const_abund(veg_mat,env$group_code_march_2025,clusnum = "G332",cov_thresh=1,const_thresh=40)
+const_abund(veg_mat,env$group_code_march_2025,clusnum = "G889",cov_thresh=1,const_thresh=40) #azonal group, sand prairies
+const_abund(veg_mat,env$group_code_march_2025,clusnum = "Gnew_GPSolonetzicGrassland",cov_thresh=1,const_thresh=40) # azonal group
+
+## Indicator Species Analysis
+veg_prg_ind<- multipatt(veg_mat,env$group_code_march_2025, 
+                    control = how(nperm=100)) 
+summary(veg_prg_ind, indvalcomp=TRUE)
+
+## Partition analysis
+veg_prg_part <- partana(env$group_code_march_2025,veglm_dist_bc_norm)
+plot(veg_prg_part)
+veg_prg_part_ctc <- as.data.frame(veg_prg_part$ctc)
+names(veg_prg_part_ctc)<-c("G075", "G141", "G273", "G331" ,"G332", "G889", "Gnew_GPSolonetzicGrassland")
+row.names(veg_prg_part_ctc)<-c("G075", "G141", "G273", "G331" ,"G332", "G889", "Gnew_GPSolonetzicGrassland")
+write.csv(veg_prg_part_ctc,file='tables/veg_prg_part$ctc.csv')
+
+```
+
+#### Symbolize the groups in a static ordination diagram and test the cluster distribution for significant
+
+```{r}
+# Test significance of the distribution of the preliminary alliances along the ordination axes
+
+veg_nmds_bc_norm_dsv <- nmds(veglm_dist_bc_norm,k=3)
+x11()
+plot(veg_nmds_bc_norm_dsv, title = "Canadian Prairies Dry & Mesic Grassland & Shrubland Groups")
+veg_gr_test <- ordtest(veg_nmds_bc_norm_dsv,env$group_code_march_2025)
+#"env$group_code_march_2025 < 0.001"
+
+# symbolize the groups dimensions 1 and 2 and overlay a GAM of climate moisture index
+x11()
+
+plot(veg_nmds_bc_norm_dsv,col=0, title = "Canadian Prairies Dry & Mesic Grassland & Shrubland Groups\nClimate Moisture Index GAM")
+points(veg_nmds_bc_norm_dsv,env$group_code_march_2025 == "G075",col="red",pch=19)
+points(veg_nmds_bc_norm_dsv,env$group_code_march_2025 == "G141",col="yellow",pch=15)
+points(veg_nmds_bc_norm_dsv,env$group_code_march_2025 == "G273",col="blue",pch=17)
+points(veg_nmds_bc_norm_dsv,env$group_code_march_2025 == "G331",col="cyan",pch=17)
+points(veg_nmds_bc_norm_dsv,env$group_code_march_2025 == "G332",col="purple",pch=17)
+points(veg_nmds_bc_norm_dsv,env$group_code_march_2025 == "G889",col="magenta",pch=18)
+points(veg_nmds_bc_norm_dsv,env$group_code_march_2025 == "Gnew_GPSolonetzicGrassland",col="green",pch=19)
+
+pr_gr_cmi<-ordisurf(veg_nmds_bc_norm_dsv, env$avg_cmi_rcp ,choices = c(1,2), col = "black",cex=0,labcex = 1, family = gaussian,main=NA,add=TRUE,knots=10)
+summary(pr_gr_cmi)
+
+# add a legend
+
+legend(.40,1.0,c("G075","G141","G273","G331","G332","G889","Solonetzic"), pch=c(19,15,17,17,17,18,19),col=c("red","yellow","blue","cyan","purple","magenta","green"),cex=0.9,bty = "n",x.intersp = 0.7,y.intersp=0.9)
+
+# add annotations
+
+text(0.32,-0.52, c(expression(paste("Climate Moisture Index"))),cex = 0.80,pos=4, col="black")
+text(0.32,-0.57, c(expression(D^2), "     = 0.63"),cex = 0.8,pos=4,col="black")
+text(0.32,-0.62, "P-Value < 0.001",cex = 0.8,pos=4,col="black")
+
+# plot the NMDS in dimensions 1 and 3
+
+# symbolize the alliance dimensions 1 and 3
+
+x11()
+plot(veg_nmds_bc_norm_dsv,col=0, ax = 1, ay = 3, title = "Canadian Prairies Dry & Mesic Grassland & Shrubland Groups")
+points(veg_nmds_bc_norm_dsv,env$group_code_march_2025 == "G075", ax = 1, ay = 3, col="red",pch=19)
+points(veg_nmds_bc_norm_dsv,env$group_code_march_2025 == "G141",ax = 1, ay = 3,col="yellow",pch=15)
+points(veg_nmds_bc_norm_dsv,env$group_code_march_2025 == "G273",ax = 1, ay = 3,col="blue",pch=17)
+points(veg_nmds_bc_norm_dsv,env$group_code_march_2025 == "G331",ax = 1, ay = 3,col="cyan",pch=17)
+points(veg_nmds_bc_norm_dsv,env$group_code_march_2025 == "G332",ax = 1, ay = 3,col="purple",pch=17)
+points(veg_nmds_bc_norm_dsv,env$group_code_march_2025 == "G889",ax = 1, ay = 3,col="magenta",pch=18)
+points(veg_nmds_bc_norm_dsv,env$group_code_march_2025 == "Gnew_GPSolonetzicGrassland",col="green",pch=19)
+```
+
+### Classifying non-reference communities to groups using vegclust tools
+
+In the prairie data set, the plant communities are assigned to either a reference or non-reference (highly disturbed/altered) status. The approach we used was to begin by analyzing only the reference plant communities to develop the group and alliance classification, and then assigned the non-reference communities to the most similar group. In the next section, we will assign the non-reference communities to reference groups based on the prairie group classification that we explored above. The **vegclass** function in the vegclust R library uses an existing classification to new samples to classes within the existing classification.  
+
+#### Import vegetation data with reference and non-reference communities
+```{r}
+    veg_all <- read.csv("non-ref_prairie_veg.csv",sep = ",")
+dim(veg_all)
+
+```
+
+### Create vegetation dataframes
+
+Vegetation analysis dataframe with log transformed prominence value
+
+```{r}
+
+vegall_mat<-matrify(veg_all[,c(2,6,10)])
+
+dim(vegall_mat)
+
+```
+
+### Environment with reference and non-reference communities
+
+```{r}
+
+env_all <- read.csv("non-ref_prairie_env.csv",sep = ",")
+
+dim(env_all)
+row.names(env_all)<-env_all$plant_community_code
+identical(row.names(env_all),row.names(vegall_mat))
+
+```
+
+The data we're using here includes both the reference and non-reference communities. As discussed in the introduction to this section, the reference communities were used to develop the group and alliance classification. The non-reference (successional or disturbed communities) were excluded. However, the non-reference communities needed to be assigned to a group (classifying to alliance was not part of the analysis). In a perfect world, each non-reference community would be assigned to its "parent" reference community, that is, the reference community in which a non-reference was assigned based on the state and transition models in the rangeland plant communities guides. 
+
+
+To assign the non-reference communities to a group, we started by using the **vegclass** function in the vegclust R package to use the reference vegetation data combined with the reference group classification to classify reference communities into the most floristically similar group. A subset of the non-reference communities were classified to a preliminary ruderal group. The ruderal subset was included with the reference communities to provide training data for non-reference communities and so that a ruderal group was included as option for the non-reference communities to classify into.
+
+#### Transform the vegetation data
+```{r}
+## Normalize transformation 
+veg_all_norm = decostand(vegall_mat,"normalize")
+
+```
+
+
+#### Select the reference vegetation data
+Select the subset of vegetation data from reference communities and a subset of non-reference communities (ruderal training data - G679) with group assignments
+```{r}
+# 
+vegmat_ref <- veg_all_norm[(env_all$successional_state %in% c('Alt','minor alteration from RC','RC','reference community','Reference plant community') | env_all$group_code_march_2025 == "G679") & !is.na(env_all$group_code_march_2025),]
+
+# remove columns that sum to zero
+vegmat_ref_nz <- vegmat_ref[,colSums(vegmat_ref)>0]
+
+dim(vegmat_ref_nz)
+
+```
+
+#### Select the subset of the vegetation data from the non-reference communities (excluding the training data from G679)
+```{r}
+vegmat_nonref <- veg_all_norm[(env_all$successional_state %notin% c('Alt','minor alteration from RC','RC','reference community','Reference plant community') &  env_all$group_code_march_2025 %notin% ("G679")) | is.na(env_all$group_code_march_2025),]
+
+dim(vegmat_nonref)
+
+# remove non-reference columns that sum to zero
+vegmat_nonref_nz <- vegmat_nonref[,colSums(vegmat_nonref)>0]
+
+dim(vegmat_nonref_nz)
+```
+
+#### Create a vector with reference group classification membership
+
+A vector containing each reference community and the group it was assigned to.
+```{r}
+# Create the vector
+gr_group_class <- env_all$group_code_march_2025[(env_all$successional_state %in% c('Alt','minor alteration from RC','RC','reference community','Reference plant community') | env_all$group_code_march_2025 == "G679") & !is.na(env_all$group_code_march_2025)]
+
+# Assign names (plant_communities_codes) to the gr_group_class object
+names(gr_group_class)<-env_all$plant_community_code[(env_all$successional_state %in% c('Alt','minor alteration from RC','RC','reference community','Reference plant community') | env_all$group_code_march_2025 == "G679") & !is.na(env_all$group_code_march_2025)]
+
+length(gr_group_class)
+
+```
+
+# Create a vegclust noise clustering object from the reference group classification 
+
+The **as.vegclust** function allows you to create a noise clustering object from an existing classification which can then be used in **vegclass** to classify new data.
+```{r}
+vegmat_ref_nz.nc = as.vegclust(vegmat_ref_nz, gr_group_class,method="NC")
+```
+
+
+####  Create a crisp clustering using the alpha threshold
+The following code illustrates that the noise clustering object created above included a clustering vector similar to the output of **vegclust**.
+```{r}
+defuzz_thresh80_vegmat_ref_nz.nc <- defuzzify(vegmat_ref_nz.nc ,method="cut",alpha = 0.8)
+defuzz_thresh80_vegmat_ref_nz.nc$cluster
+
+```
+
+#### Use the **vegclass** function to classify the non-reference communities.
+
+```{r}
+#classify non-reference communties
+vegmat_nonref_nz.nc = vegclass(vegmat_ref_nz.nc, vegmat_nonref_nz)
+
+# Create a crisp clustering
+defuzzify(vegmat_nonref_nz.nc)$cluster
+table(defuzzify(vegmat_nonref_nz.nc)$cluster)
+round(vegmat_nonref_nz.nc$mem, dig=3)
+
+```
+
+#### Save the results to a CSV file
+```{r}
+
+write.csv(defuzzify(vegmat_nonref_nz.nc)$cluster,file='tables/vegmat_nonref_nz_nc$cluster.csv')
+
+```
+
+For the Canadian prairie classification analysis, the above approach worked well to assign non-reference communities to their parent reference group. However, in some cases, the non-reference communities were not assigned. In particular, non-reference communities that were high degraded or that represented a dis-climax condition, were often mis-classified (often being assigned to a drier reference group). For classifying non-reference communities into the ruderal group (G679) the approach worked very well.
+
+The above approach can be used with any existing vegetation classification to classify new samples. We won't demonstrate this in the workshop; however, in practice you'd want to review the class assignments for the new samples using the variety of analytical techniques we have used throughout the workshop, paired with expert review, revise the classification, and reassess the resulting classification quantitatively.
+
+
+

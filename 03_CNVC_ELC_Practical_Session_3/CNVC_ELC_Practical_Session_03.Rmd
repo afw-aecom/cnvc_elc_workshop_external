@@ -1,0 +1,661 @@
+---
+title: "CNVC ELC Practical Session 3"
+author: "Aaron Wells"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+Run this code block first to load the R libraries necessary for this tutorial.
+```{r echo=TRUE, results='hide', warning = FALSE, message = FALSE}
+# Libraries
+library(labdsv)
+library(tidyverse)
+library(dplyr)
+library(vegan)
+library(stats) 
+library(ggplot2)
+library(RColorBrewer)
+library(gt)
+library(cluster)
+library(vegclust)
+library(optpart)
+library(indicspecies)
+library(optpart)
+```
+
+# Custom Functions
+
+Run the code in the next two code blocks to create custom function in this R project (assumes you are working in a new project for this session).
+
+## Function 1: pam.select
+
+```{r}
+pam.select<-function (dist, k) 
+{
+    library(cluster)
+    tmp.clus <- c(2:k)
+    tmp.width <- rep(0, length = k - 1)
+    for (i in 1:k - 1) {
+        tmp.pam <- pam(dist, i + 1)
+        tmp.width[i] <- tmp.pam$silinfo$avg.width
+    }
+    output.tmp <- as.data.frame(cbind(tmp.clus, tmp.width))
+    names(output.tmp) <- c("numclus", "avg.width")
+    plot(output.tmp[, 1], output.tmp[, 2], xlab = "Number of Clusters", 
+        ylab = "Average Silhouette Width", main = "Average Silhouette Width by Number of Clusters")
+    abline(v = output.tmp$numclus[output.tmp$avg.width == max(output.tmp$avg.width)], 
+        col = 2)
+    output.tmp[order(output.tmp[, 2], decreasing = TRUE), ]
+}
+```
+
+## Function 2: const_abund
+veg = long format veg matrix
+pltid = plot id column name
+plnt = plant species name column
+cov = abundance column
+clusvec = clustering dataframe
+clusnum = clustering number of interest
+covthresh = minimum average cover to display
+const_thresh = minimum constancy to display
+
+```{r}
+
+const_abund<-function (veg,clusvec,clusnum,const_thresh=0,cov_thresh=0) 
+{
+  library(tidyverse)
+  library(dplyr)
+  library(labdsv)
+  
+  veg_clus <- veg[clusvec == clusnum,]
+  veg_clus_long <- dematrify(veg_clus)
+  
+  clus_summ <- veg_clus_long %>% 
+    as_tibble() %>%
+      group_by(species) %>%
+        summarize(mean_abundance = mean(abundance, na.rm = TRUE),
+          stdev = sd(abundance, na.rm = TRUE),
+          min_abundance = min(abundance, na.rm = TRUE),
+          max_abundance = max(abundance, na.rm = TRUE),
+          median_abundance=quantile(abundance,probs=0.5),
+          spp_count = n()) 
+
+  clus_count <- clusvec %>%
+    as_tibble() %>%
+      count(value)
+  
+  constancy_percent <- (clus_summ$spp_count/clus_count$n[clus_count$value==clusnum])*100
+  
+  cat("Constancy & Abundance Metrics for Cluster ",clusnum, "\n")
+  
+  clus_summ %>%
+    add_column(constancy_percent) %>%
+      filter(constancy_percent>=const_thresh) %>%
+        filter(mean_abundance>=cov_thresh) %>%
+            arrange(-spp_count, -mean_abundance,species) %>%
+              print(n=10000)
+}
+
+```
+
+## Read the vegetation data into R and convert to wide format
+First, we'll read the vegetation data into R in long format and convert it to wide format (i.e., plots as rows species as columns). The data we'll be using for this exercise if from the Saskatchewan Forest Ecosystem Classification (FEC) data set with tree canopy cover data aggregated to species.
+
+```{r echo=TRUE, results='hide'}
+# read in the vegetation data
+fec_veg <- read.csv("fec_vegfor.csv",sep = ",")
+
+# check the dimensions (output = row, columns)
+dim(fec_veg)
+
+# convert the vegetation data object to wide format (plot = rows, species = columns)
+fec_veg_mat <- matrify(fec_veg[,c(1,3,5)])
+
+dim(fec_veg_mat)
+```
+
+## Read the environment data into R
+Next, we'll read in the environment data that corresponds to the plots in the vegetation dataframe. We'll assign the plot numbers as the row names, sort the data frame alphabetically by plot number (to ensure it's sorted the same as the vegetation data frame), and then confirm the two data frames are the same length and in the same order.
+
+```{r echo=TRUE, results='hide'}
+fec_env <- read.csv("fec_envfor.csv",sep = ",")
+
+# confirm that the number of rows is the same as the wide format vegetation data
+dim(fec_env)
+
+# assign row names to the plot number column
+row.names(fec_env)<-fec_env$plotnumber
+row.names(fec_env)
+
+# sort the environment dataframe by row.names to match the vegetation data frame
+fec_env <- fec_env[order(fec_env$plotnumber), ]
+
+# confirm the veg and environment data frames are sorted the same (alphabetically by plot number)
+
+identical(row.names(fec_env),row.names(fec_veg_mat))
+
+# review and troubleshoot if the vegetation and environment dataframe orders don't match
+cbind(row.names(fec_env),row.names(fec_veg_mat))[1:500,]
+
+```
+
+### Assign missing data value
+
+```{r echo=TRUE, results='hide'}
+# Adjust maximum number of lines to print
+options(max.print=100000)
+
+
+## Assigning specific value
+fec_env[fec_env ==999]<-NA
+
+```
+
+
+### Subset environment data by selecting plots assigned to 4 ecosites
+```{r echo=TRUE, results='hide'}
+
+
+fec_env_subset <- fec_env[fec_env$ecosite_title %in% c('Black spruce - white birch/feathermoss','Jack pine/bearberry/lichen','Trembling aspen - white spruce/western snowberry','White birch - black spruce/lingonberry','White spruce/crowberry/feathermoss'),]
+
+dim(fec_env_subset)
+
+# Subset vegetation data by selecting plots assigned to 4 ecosites
+fec_veg_mat_subset <- fec_veg_mat[fec_env$ecosite_title %in% c('Black spruce - white birch/feathermoss','Jack pine/bearberry/lichen','Trembling aspen - white spruce/western snowberry','White birch - black spruce/lingonberry','White spruce/crowberry/feathermoss'),]
+
+dim(fec_veg_mat_subset)
+
+#remove species with zero occurrences in the vegetation data subset
+fec_veg_mat_subset<-fec_veg_mat_subset[,colSums(fec_veg_mat_subset[])>0] 
+
+dim(fec_veg_mat_subset)
+
+```
+
+### Box Plots
+
+Box plots are a useful way to visualize the distribution of continuous environmental variables and identify outliers. They are also provide a meaningful figure for reviewing a classification and for reporting. For instance, depth of organic matter by ecosite for the subset of Saskatchewan FEC data that we created above.
+
+```{r echo=TRUE, results='hide',warning = FALSE}
+
+
+p<-ggplot(fec_env_subset, aes(x=ecosite, y=depth_of_organic_matter_cm, fill=ecosite_title)) +
+  geom_boxplot(position=position_dodge(1),outlier.shape = 18,outlier.size = 2.5) + # plot the box
+    scale_fill_manual(values = c("#E69F00" ,"#56B4E9", "#009E73", "#F0E442", "#0072B2"),name = "Boxplots by\nEcosite") + # define the fill colors to symbolize ecosites and add the legend with title
+  geom_point(position = position_jitterdodge(jitter.width = 0.15)) # plot the data points to show the distribution and density
+
+pboxorg <- p + 
+  xlab("Ecosite Code") + ylab("Depth Org. Matter (cm)")
+
+png("Fig_1_depth_org_by_ecosite.png", height=2000, width=2000,res=300)
+pboxorg
+dev.off()
+```
+
+### Stacked bar chart
+
+Stacked bar charts are a useful way to visualize values of subcategories within broader categories and to compare the values across categories; for instance, average percent cover of vegetation structure and abiotic ground cover classes by ecosite.
+
+#### Select the data and calculate mean abundance by ecosite and vegetation structure class
+```{r echo=TRUE, results='hide',warning = FALSE,message = FALSE}
+
+veg_struct <- fec_env_subset %>%
+                dplyr::select("ecosite","ecosite_title","leaf_litter","needle_litter","rock","soil","water","woody_debris","broadleaf_overstory_tree","broadleaf_sapling","broadleaf_seedling","needleleaf_overstory_tree","needleleaf_sapling","needleleaf_seedling","shrub_cover","forbs_and_graminoids","bryophytes_and_lichens") %>%
+                  pivot_longer(!c(ecosite_title,ecosite), names_to = "structure_class", values_to = "cover_percent") %>%
+                    group_by(ecosite, ecosite_title, structure_class) %>%
+                      summarise(avg_cover_percent = mean(cover_percent))
+```
+
+
+#### Convert the structure_class column to a factor and specify the order of levels, the levels will display from top (first listed) to bottom (last listed) in the stacked bar charts
+```{r}
+veg_struct$structure_class <- factor(veg_struct$structure_class, levels = c("needleleaf_overstory_tree","needleleaf_sapling","needleleaf_seedling","broadleaf_overstory_tree","broadleaf_sapling","broadleaf_seedling","shrub_cover","forbs_and_graminoids","bryophytes_and_lichens","woody_debris","leaf_litter","needle_litter","rock","soil","water"))
+
+```
+
+#### Select colors that will represent the structure classes
+```{r}
+# Use the color brewer function to generate some color palettes to use for selecting colors for the figure. 
+brewer.pal(6,"Greens") 
+
+??brewer.pal
+
+# Create a vector of colors. Order the colors in the same order as the levels in the structure_class factor
+
+strucolrs<-c("#006D2C","#31A354","#74C476","#A1D99B","#C7E9C0","#EDF8E9","#FC9272","#F7FCB9","#756BB1","#CC4C02", "#993404", "#662506","#000000","#999999","#045A8D")
+
+```
+
+#### Create the stacked barchart figure
+```{r}
+height <- 4
+width <- 6
+resize <- 1.5
+hghts <- c(3, 5)
+
+q <- ggplot(data=veg_struct,
+            aes(x=ecosite, y=avg_cover_percent,
+  fill=structure_class)) + 
+  geom_bar(stat="identity") +
+  scale_x_discrete(name="Ecosite") +
+  scale_y_continuous(name="Average Cover (%)") +
+  theme_bw() + scale_fill_manual(values=strucolrs, name="Size Class") 
+q <- q + theme(
+                axis.text.x = element_text(angle = 60, hjust = 1,size = 10,color = "black"),
+                axis.text.y = element_text(size = 12),
+                axis.title.x = element_blank(),
+                axis.title.y = element_text(size = 15),
+                legend.title = element_text(size = 15, face = "bold"),
+                legend.text = element_text(size = 12)
+
+               )
+
+png(filename = "Fig_2_veg_structure_by_ecosite_stacked_barchart.png", width=width*resize, height=height*resize, units="in", res=600)
+
+print(q)
+dev.off()
+
+```
+
+## Ordination Diagrams - Create publication ready ordiation diagrams
+
+### Read in the praire data
+
+```{r}
+    veg <- read.csv("prairie_veg.csv",sep = ",")
+                                        
+dim(veg)
+
+```
+
+### Create the long format vegetation dataframe
+
+```{r}
+
+veg_mat<-matrify(veg[,c(1,2,3)])
+
+dim(veg_mat)
+```
+
+### Environment and Plant Community data GRASSLAND subset
+
+```{r}
+
+env <- read.csv("prairie_env.csv", sep = ",")
+
+dim(env)
+
+# assign row names to the plot number column
+row.names(env)<-env$plant_community_code
+
+# sort the environment dataframe by row.names to match the vegetation data frame
+env <- env[order(env$plant_community_code), ]
+
+identical(row.names(env),row.names(veg_mat))
+
+
+```
+
+### Create the Ordination
+```{r}
+
+# Normalized abundance transformation
+veg_norm <-         
+  decostand(veg_mat, method = "normalize")
+
+# Dissimilarity
+veg_dist_bc_norm <- vegdist(veg_norm,method="bray") 
+
+# Create the Ordination
+veg_nmds_bc_norm_dsv <- nmds(veg_dist_bc_norm,k=3)
+
+```
+
+### Create a multi-panel ordination figure and export to png
+```{r}
+
+# create a png file
+png("Fig_3_prairie_grassland_groups_nmds.png", height = 7.5,width = 7.5,units = "in", res = 600)
+
+# set the plotting parameters
+
+par(mfrow = c(2, 2), # 2 rows (first number), 2 column (second number)
+    mgp=c(1.2,0.25,0), # distance between (1) the axis titles and the axes and (2) the axis tick mark labels and the axes. The 3rd number changes the location of the axes
+    #mar=c(0,0,0,0), # sets the width of the margins that surround an individual panel.
+    oma=c(5.0,3.5,3.5,0.75))  # sets the width of the margins around all panels, the order is bottom, left, top, right
+
+# Panel 1 - Group
+par(mai=c(0.1,0,0,0.1)) # sets the margins of the panel in inches, the order is bottom, left, top, right
+
+plot(veg_nmds_bc_norm_dsv,col=0,xlab = NA, ylab = NA, cex.axis=0.8, tck = -.015,cex.lab=.8 ,xaxt="none")
+points(veg_nmds_bc_norm_dsv,env$group_code_march_2025 == "G075",col="red",pch=19)
+points(veg_nmds_bc_norm_dsv,env$group_code_march_2025 == "G141",col="yellow",pch=15)
+points(veg_nmds_bc_norm_dsv,env$group_code_march_2025 == "G273",col="blue",pch=17)
+points(veg_nmds_bc_norm_dsv,env$group_code_march_2025 == "G331",col="cyan",pch=17)
+points(veg_nmds_bc_norm_dsv,env$group_code_march_2025 == "G332",col="purple",pch=17)
+points(veg_nmds_bc_norm_dsv,env$group_code_march_2025 == "G889",col="magenta",pch=18)
+points(veg_nmds_bc_norm_dsv,env$group_code_march_2025 == "Gnew_GPSolonetzicGrassland",col="green",pch=19)
+
+# add a legend
+
+legend(.40,1.0,c("G075","G141","G273","G331","G332","G889","Solonetzic"), pch=c(19,15,17,17,17,18,19),col=c("red","yellow","blue","cyan","purple","magenta","green"),cex=0.7,bty = "n",x.intersp = 0.7,y.intersp=0.9)
+
+# add an annotation (panel label)
+text(-1.0,0.90, "A",cex = 0.9,pos=4,col="black") #panel label
+
+#dev.off()
+
+# Panel 2 group with Climate Moisture Index Generalized Additive Model (GAM) overlay
+
+par(mai=c(0.1,0,0,0.1))
+
+plot(veg_nmds_bc_norm_dsv,col=0, xlab = NA, ylab = NA, cex.axis=0.8, tck = -.015,cex.lab=.8 ,xaxt="none", yaxt="none")
+points(veg_nmds_bc_norm_dsv,env$group_code_march_2025 == "G075",col="red",pch=19)
+points(veg_nmds_bc_norm_dsv,env$group_code_march_2025 == "G141",col="yellow",pch=15)
+points(veg_nmds_bc_norm_dsv,env$group_code_march_2025 == "G273",col="blue",pch=17)
+points(veg_nmds_bc_norm_dsv,env$group_code_march_2025 == "G331",col="cyan",pch=17)
+points(veg_nmds_bc_norm_dsv,env$group_code_march_2025 == "G332",col="purple",pch=17)
+points(veg_nmds_bc_norm_dsv,env$group_code_march_2025 == "G889",col="magenta",pch=18)
+points(veg_nmds_bc_norm_dsv,env$group_code_march_2025 == "Gnew_GPSolonetzicGrassland",col="green",pch=19)
+
+# Overlay the results of a CAM
+
+pr_gr_cmi<-ordisurf(veg_nmds_bc_norm_dsv, env$avg_cmi_rcp ,choices = c(1,2), col = "black",cex=0,labcex = 1, family = gaussian,main=NA,add=TRUE,knots=10)
+summary(pr_gr_cmi)
+
+# Add annotations
+
+# GAM metrics
+
+text(0.09,0.95, c(expression(paste("Climate Moisture Index"))),cex = 0.7,pos=4, col="black")
+text(0.09,0.87, c(expression(D^2), "     = 0.63"),cex = 0.7,pos=4,col="black")
+text(0.09,0.79, "P-Value < 0.001",cex = 0.7,pos=4,col="black")
+
+# Panel label
+text(-1.0,0.90, "B",cex = 0.9,pos=4,col="black") #panel label
+
+#dev.off()
+
+# Panel 3 group with Growing Degree Days Generalized Additive Model (GAM) overlay
+
+par(mai=c(0,0,0,0.1))
+
+plot(veg_nmds_bc_norm_dsv,col=0, ,xlab = NA, ylab = NA, cex.axis=0.8, tck = -.015,cex.lab=.8)
+points(veg_nmds_bc_norm_dsv,env$group_code_march_2025 == "G075",col="red",pch=19)
+points(veg_nmds_bc_norm_dsv,env$group_code_march_2025 == "G141",col="yellow",pch=15)
+points(veg_nmds_bc_norm_dsv,env$group_code_march_2025 == "G273",col="blue",pch=17)
+points(veg_nmds_bc_norm_dsv,env$group_code_march_2025 == "G331",col="cyan",pch=17)
+points(veg_nmds_bc_norm_dsv,env$group_code_march_2025 == "G332",col="purple",pch=17)
+points(veg_nmds_bc_norm_dsv,env$group_code_march_2025 == "G889",col="magenta",pch=18)
+points(veg_nmds_bc_norm_dsv,env$group_code_march_2025 == "Gnew_GPSolonetzicGrassland",col="green",pch=19)
+
+# Overlay the results of a GAM
+
+pr_gr_gdd<-ordisurf(veg_nmds_bc_norm_dsv, env$avg_gdd_05_1991_2020 ,choices = c(1,2), col = "black",cex=0,labcex = 1, family = gaussian,main=NA,add=TRUE,knots=10)
+summary(pr_gr_gdd)
+
+# Add annotations
+
+# GAM metrics
+
+text(0.09,0.95, c(expression(paste("Growing Degree Days"))),cex = 0.7,pos=4, col="black")
+text(0.09,0.87, c(expression(D^2), "     = 0.54"),cex = 0.7,pos=4,col="black")
+text(0.09,0.79, "P-Value < 0.001",cex = 0.7,pos=4,col="black")
+
+# Panel label
+text(-1.0,0.90, "C",cex = 0.9,pos=4,col="black") #panel label
+
+#dev.off()
+
+# Panel 4 Ecosite symbolized
+
+par(mai=c(0,0,0,0.1))
+
+plot(veg_nmds_bc_norm_dsv,col=0, ,xlab = NA, ylab = NA, cex.axis=0.8, tck = -.015,cex.lab=.8 , yaxt="none")
+points(veg_nmds_bc_norm_dsv,env$agg_ecosite_title == "Clay",col="#CE1256",pch=15,cex=0.9)
+points(veg_nmds_bc_norm_dsv,env$agg_ecosite_title == "Solonetzic",col="#FD8D3C",pch=15,cex=0.9)
+points(veg_nmds_bc_norm_dsv,env$agg_ecosite_title == "Loam",col="#006D2C",pch=20)
+points(veg_nmds_bc_norm_dsv,env$agg_ecosite_title %in% c("Dunes","Sand and Sandy"),col="#8C510A",pch=18)
+
+points(veg_nmds_bc_norm_dsv,env$agg_ecosite_title == "Limy",col="#000000",pch=4,cex=1.2)
+points(veg_nmds_bc_norm_dsv,env$agg_ecosite_title == "Thin",col="#5AB4AC",pch=17,cex=0.9)
+points(veg_nmds_bc_norm_dsv,env$agg_ecosite_title == "Shallow to gravel",col="#8856A7",pch=17,cex=0.9)
+points(veg_nmds_bc_norm_dsv,env$agg_ecosite_title == "Subirrigated and Overflow",col="#045A8D",pch=17,cex=0.9)
+
+# add a legend
+
+legend(.20,1.0,c("Clay","Solonetzic","Loam","Dunes/Sand","Thin","Shallow to Grvl","Subirrigated"), pch=c(15,15,20,18,17,17,17),col=c("#CE1256","#FD8D3C","#006D2C","#8C510A","#5AB4AC","#8856A7","#045A8D"),cex=0.7,bty = "n",x.intersp = 0.7,y.intersp=0.85)
+
+#dev.off()
+
+# Add annotations
+
+# Panel label
+text(-1.0,0.90, "D",cex = 0.9,pos=4,col="black") #panel label
+
+# Entire Plotting Area
+
+# axis labels
+mtext('NMDS 1', side = 1, outer = TRUE, line = 2)
+mtext('NMDS 2', side = 2, outer = TRUE, line = 2)
+
+# Add a legend or text annotation outside the plotting area at the bottom
+par(fig = c(0, 1, 0, 1), oma = c(0, 0.5, 0, 0), mar = c(0, 0, 0.25, 0), new = TRUE)
+plot(0, 0, type = "n", bty = "n", xaxt = "n", yaxt = "n")
+
+legend("bottomleft",c("* One community was assigned to the Limy ecosite and is indicated with a black X in panel D."), col="black",cex=0.7,bty = "n",x.intersp = 0.5,y.intersp=0.9
+       )
+
+# Add an title
+mtext("Canadian Prairies Grassland & Shrubland Groups", side=3, line=-2, outer=TRUE, cex=1.5, font=2)
+
+dev.off()
+
+```
+
+### Environmental Data Summaries
+
+```{r}
+x11()
+fec_veg_mat_subset_abuocc <- abuocc(fec_veg_mat_subset,minabu=0,panel='all')
+
+ecoenvsum <- fec_env_subset %>%
+              mutate(species_richness = fec_veg_mat_subset_abuocc$spc.plt) %>%
+              dplyr::select(ecosite, ecosite_title, elevation_m, depth_of_organic_matter_cm,mean_tree_age_year,species_richness) %>%
+                group_by(ecosite,ecosite_title) %>%
+                  summarise("Avg. Elevation (m)" = as.integer(mean(elevation_m)),
+                            "SD Elevation (m)" = as.integer(sd(elevation_m)),
+                            "Min. Elevation (m)" = as.integer(min(elevation_m)),
+                            "Max. Elevation (m)" = as.integer(max(elevation_m)),
+                            "Cnt. Elev. (m) no NAs" = sum(!is.na(elevation_m)), # sample size excluding missing data values
+                            "Cnt. Elevation (m)" = n(), # total sample size
+                            "Avg. Organic Depth (cm)" = round(mean(depth_of_organic_matter_cm),1),
+                            "Avg. Tree Age (yr)" = round(mean(mean_tree_age_year),1),
+                            "Avg. Species Richness" = round(mean(species_richness),0)
+                  )
+ecoenvsum                         
+
+
+# Convert ecoenvsum from wide format to long format
+ecoenvsum_long <- ecoenvsum %>%
+                    pivot_longer(!c(ecosite,ecosite_title), names_to = "Data_Attribute", values_to = "Value")
+
+ecoenvsum_long
+
+# Create a folder to save output tbles
+dir.create(file.path("tables"))
+
+# Save the long format results to a CSV file for reporting
+write.csv(ecoenvsum_long,"tables/ecosite_environment_summary_table.csv")
+
+```
+
+### Cluster Analysis Results
+
+```{r}
+
+# Normalized abundance transformation
+fec_veg_mat_norm <-         
+  decostand(fec_veg_mat_subset, method = "normalize")
+
+# Dissimilarity
+fec_veg_mat_norm_dist_bc <- vegdist(fec_veg_mat_norm,method="bray") 
+
+# Evaluate the average within to between cluster similar ratio (silhouette width) for a variety of cluster numbers
+fec_veg_mat_norm_pamsel<-pam.select(fec_veg_mat_norm_dist_bc,k=30)
+fec_veg_mat_norm_pamsel
+
+# Create 4 cluster classification
+fec_veg_mat_norm_pam_4 <- pam(fec_veg_mat_norm_dist_bc,k=4)
+attributes(fec_veg_mat_norm_pam_4)
+x11()
+plot(fec_veg_mat_norm_pam_4) # the Silhouette can be saved using Save As in the graphics window
+
+# Save the silinfo to a CSV file
+
+write.csv(fec_veg_mat_norm_pam_4$silinfo$widths,"tables/fec_veg_mat_norm_pam_4$silinfo$widths.csv")
+
+```
+
+### Indicator species analysis results
+
+```{r}
+# Multiple pattern analysis
+
+fec_veg_mat_norm_pam_4_ind<- multipatt(fec_veg_mat_subset,fec_veg_mat_norm_pam_4$clustering, 
+                    control = how(nperm=100)) 
+summary(fec_veg_mat_norm_pam_4_ind, indvalcomp=TRUE)
+
+# Evaluate the attributes that are part of the indicator species analysis object
+attributes(fec_veg_mat_norm_pam_4_ind)
+
+fec_veg_mat_norm_pam_4_ind$A #  specificity
+fec_veg_mat_norm_pam_4_ind$B # fidelity
+fec_veg_mat_norm_pam_4_ind$str # Stat for all clusters and combinations
+fec_veg_mat_norm_pam_4_ind$sign # Cluster or combination with the greatest significance by species with stat and p values
+
+# Save the specificity results to a CSV file
+write.csv(fec_veg_mat_norm_pam_4_ind$A,"tables/fec_veg_mat_norm_pam_4_ind_Specificity.csv")
+
+```
+
+* A = specificity, the probability that the surveyed site belongs to the target site group given the fact that the species has been found
+
+* B = fidelity or sensitivity (constancy) = the probability of finding the species in sites belonging to the site group
+
+* Stat = metric that combined A and B. Species with the high values of A and B have the highest indicator value (high frequency of occurrence and when they occur they strongly indicative of the target site group)
+
+* p.value = significance value of the indicator
+
+
+# Partition Analysis Results
+```{r}
+# Partition Analysis Results
+
+fec_veg_pam4_part <- partana(fec_veg_mat_norm_pam_4$clustering,fec_veg_mat_norm_dist_bc)
+
+plot(fec_veg_pam4_part) # the Partana plots can be saved using Save As in the graphics window
+
+# Cluster to Cluster similarity data frame
+fec_veg_pam4_part$ctc
+
+# Save the results to a CSV file
+write.csv(fec_veg_pam4_part$ctc,"tables/fec_veg_pam4_part$ctc.csv")
+
+# Plot to cluster similarity matrix - shows the similarity of each plot to every cluster, used to evaluate the membership of plots in the cluster each is assigned and all other clusters 
+
+# Assign row names to the plot to cluster data frame from the environment data frame
+
+row.names(fec_veg_pam4_part$ptc) <- row.names(fec_env_subset)
+
+# Save the results to a CSV file
+write.csv(fec_veg_pam4_part$ptc,"tables/fec_veg_pam4_part$ptc.csv")
+
+```
+
+### Constancy/Cover tables
+
+```{r}
+
+# Select the subset of ecosites we've been using as an example from the long format vegetation dataframe
+fec_veg_subset <- fec_veg[fec_veg$plotnumber %in% row.names(fec_env_subset),]
+
+# Create the wide format vegetation dataframe
+fec_veg_subset_w_layer <- matrify(fec_veg_subset[,c(1,4,5)])
+
+# confirm that the new vegetation dataframe and environment dataframe have the same row names in the same order
+identical(row.names(fec_env_subset),row.names(fec_veg_subset_w_layer))
+
+# create a lifeform x species matrix
+
+lifeform_mat <- fec_veg_subset %>%
+                    tibble() %>%
+                  dplyr::select(analysis_name_w_layer,physiog_agg) %>%
+                    distinct(analysis_name_w_layer,physiog_agg) %>%
+                      arrange(analysis_name_w_layer)
+lifeform_mat
+dim(lifeform_mat)
+dim(fec_veg_subset_w_layer)
+
+# Create a dataframe that contains the order of lifeforms to use in sorting the constancy/cover results
+lifeform_mat <- lifeform_mat %>%
+                  mutate(physiog_sort_order = case_when(
+              physiog_agg == "Overstory_Tree" ~ 1,
+              physiog_agg == "Sapling_Shrub" ~ 2,
+              physiog_agg == "Seedling_Shrub" ~ 3,
+              physiog_agg == "Forbs and Graminoids" ~ 4,
+              physiog_agg == "Mosses and Lichens" ~ 5
+              )
+            )
+
+
+# Set const_thresh to the minimum constancy threshold that you want to display
+
+poptre_pigla_const <- const_abund(fec_veg_subset_w_layer,fec_env_subset$ecosite_title,clusnum = "Trembling aspen - white spruce/western snowberry",cov_thresh=0,const_thresh=40)
+
+
+# Join the constancy/cover table with the lifeform data frame
+poptre_pigla_const_lfrm <- 
+  poptre_pigla_const %>%
+    left_join(lifeform_mat, by = join_by(species == analysis_name_w_layer)) %>%
+      dplyr::select(physiog_sort_order, physiog_agg, species, mean_abundance,stdev,min_abundance,max_abundance,median_abundance,spp_count,constancy_percent)
+
+# Show the constancy/cover table sorted by lifeform (using the sort order we specified, e.g., trees first) then species
+poptre_pigla_const_lfrm %>%
+  arrange(physiog_sort_order, species) %>%
+    dplyr::select(physiog_agg, species, mean_abundance,stdev,min_abundance,max_abundance,median_abundance,spp_count,constancy_percent) %>%
+    print(n=Inf)
+
+# Show the constancy/cover table sorted by constancy (DESC), lifeform, then average cover (DESC)
+poptre_pigla_const_lfrm %>%
+  arrange(-constancy_percent,physiog_sort_order,-mean_abundance) %>%
+    dplyr::select(physiog_agg, species, mean_abundance,stdev,min_abundance,max_abundance,median_abundance,spp_count,constancy_percent) %>%
+    print(n=Inf)
+
+# Create the above table in the RStudio viewer and highlight rows meeting certain thresholds
+poptre_pigla_const_lfrm %>%
+  arrange(physiog_sort_order, species) %>%
+    gt() %>%
+      tab_style(
+        style = list(
+        cell_fill(color = "lightcyan"),
+        cell_text(weight = "bold")
+      ),
+      locations = cells_body(
+        columns = c(physiog_agg, species, mean_abundance,stdev,min_abundance,max_abundance,median_abundance,spp_count,constancy_percent),
+        rows = constancy_percent >= 80
+      )
+        )
+
+# save the results to a CSV file
+write.csv(poptre_pigla_const_lfrm,"tables/poptre_picgla_syocc_concov.csv")
+
+```
