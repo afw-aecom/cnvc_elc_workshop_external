@@ -178,6 +178,8 @@ fec_veg_mat_subset<-fec_veg_mat_subset[,colSums(fec_veg_mat_subset[])>0]
 
 dim(fec_veg_mat_subset)
 
+
+identical(row.names(fec_veg_mat_subset),row.names(fec_env_subset))
 ```
 
 ### Box Plots
@@ -247,7 +249,7 @@ q <- ggplot(data=veg_struct,
   geom_bar(stat="identity") +
   scale_x_discrete(name="Ecosite") +
   scale_y_continuous(name="Average Cover (%)") +
-  theme_bw() + scale_fill_manual(values=strucolrs, name="Size Class") 
+  theme_bw() + scale_fill_manual(values=strucolrs, name="Vegetation Strucuture") 
 q <- q + theme(
                 axis.text.x = element_text(angle = 60, hjust = 1,size = 10,color = "black"),
                 axis.text.y = element_text(size = 12),
@@ -440,6 +442,8 @@ legend(.20,1.0,c("Clay","Solonetzic","Loam","Dunes/Sand","Thin","Shallow to Grvl
 
 # Panel label
 text(-1.0,0.90, "D",cex = 0.9,pos=4,col="black") #panel label
+
+#dev.off()
 
 # Entire Plotting Area
 
