@@ -31,30 +31,7 @@ We'll begin this practical session looking at the dry and mesic grassland and sh
 
 ### List of libraries for workshop
 
-#### DELETE ONCE ALL LIBRARIES CONFIRMED
-```{r}
-#  Load the required R libraries
-library(labdsv)
-library(vegan)
-library(cluster)
-library(DBI)
-library(RPostgreSQL)
-library(rstudioapi)
-library(tidyverse)
-library(dplyr)
-library(factoextra)
-library(optpart)
-library(psychTools)
-library(rgl)
-library(vegan3d)
-library("operator.tools")
-library("data.table")
-library("vegclust")
-library(indicspecies)
-library(clValid)
-library(gt)
 
-```
 If you started a new R session, first, copy the libraries and paste them into the console and click return. This will load the R libraries necessary for this session.
 
 ```{r}
@@ -182,7 +159,7 @@ dim(veg_lm)
 
 ```{r}
 
-# raw prominence
+# create the wide format vegetation dataframe
 veglm_mat<-matrify(veg_lm[,c(1,2,3)])
 
 dim(veglm_mat)
@@ -310,16 +287,16 @@ veglm_sppcor_log <- veglm_sppcor_log[order(veglm_sppcor_log[,1],decreasing = TRU
 
 
 # Save the results to a CSV file for review
-First, create a folder in the working directory to store exported tables.
+First, create a folder in the working directory to store exported tables_session2.
 ```{r}
 
-dir.create(file.path("tables"))
+dir.create(file.path("tables_session2"))
 
 ```
 
 Then export the CSV
 ```{r}
-write.csv(veglm_sppcor_log, file = "tables/veglm_sppcor_log_PearsonCor.csv")
+write.csv(veglm_sppcor_log, file = "tables_session2/veglm_sppcor_log_PearsonCor.csv")
 
 ```
 
@@ -398,6 +375,10 @@ veglm_norm_pam_6_ind<- multipatt(veglm_mat,veglm_norm_pam_6$clustering,
                     control = how(nperm=100)) 
 summary(veglm_norm_pam_6_ind, indvalcomp=TRUE)
 
+veglm_norm_pam_6_ind<- multipatt(veglm_mat,env_lm$alliance_code_march_2025 , 
+                    control = how(nperm=100)) 
+summary(veglm_norm_pam_6_ind, indvalcomp=TRUE)
+
 ```
 
 
@@ -409,7 +390,7 @@ veglm_norm_pam_6_part <- partana(veglm_norm_pam_6$clustering,veglm_dist_bc_norm)
 plot(veglm_norm_pam_6_part)
 
 # Export the cluster to cluster similarity dataframe
-write.csv(veglm_norm_pam_6_part$ctc,file='tables/veglm_norm_pam_6_part$ctc.csv')
+write.csv(veglm_norm_pam_6_part$ctc,file='tables_session2/veglm_norm_pam_6_part$ctc.csv')
 
 # Export the plot to cluster similarity dataframe
 
@@ -426,7 +407,7 @@ veglm_norm_pam_6_part$ptc <- as.data.frame(veglm_norm_pam_6_part$ptc)
 names(veglm_norm_pam_6_part$ptc) <- c("Clus_1","Clus_2","Clus_3","Clus_4","Clus_5","Clus_6","Clustering")
 
 # Save to a CSV file
-write.csv(veglm_norm_pam_6_part$ptc,file='tables/veglm_norm_pam_6_part$ptc.csv')
+write.csv(veglm_norm_pam_6_part$ptc,file='tables_session2/veglm_norm_pam_6_part$ptc.csv')
 
 ```
 
@@ -462,7 +443,6 @@ The above information is from [How to use the vegclust package](https://cran.r-p
 
 Defuzzify using an alpha threshold
 ```{r}
-
 defuzz_thresh80_veglm_nc6 <- defuzzify(veglm_norm_noise.nc6 ,method="cut",alpha = 0.8)
 defuzz_thresh80_veglm_nc6$cluster
 table(defuzz_thresh80_veglm_nc6$cluster,useNA = "always")
@@ -486,17 +466,17 @@ Compile the PAM and noise clustering results and export to a CSV file
 veglm_norm_pam_6_sil <- veglm_norm_pam_6$silinfo$widths[order(row.names(veglm_norm_pam_6$silinfo$widths)), ]
 
 # combined environment data with the clustering results into a data frame
-clus_results_veglm_nc6<-cbind(env_lm$group_code_march_2025,env_lm$alliance_code_march_2025, env_lm$ecoregion, env_lm$agg_ecosite_title, env_lm$plant_community_code, env_lm$plant_community_name_scientific, env_lm$shrub_prominence_value, round(veglm_norm_noise.nc6$mem, dig=3),defuzz_thresh80_veglm_nc6$cluster,defuzz_maxalpha_veglm_nc6$cluster,veglm_norm_pam_6_sil)
+clus_results_veglm_nc6<-cbind(env_lm$group_code_march_2025,env_lm$alliance_code_march_2025, env_lm$ecoregion, env_lm$agg_ecosite_title, env_lm$plant_community_code, env_lm$plant_community_name_scientific, env_lm$shrub_prominence_value, round(veglm_norm_noise.nc6$mem, dig=3),defuzz_thresh80_veglm_nc6$cluster,defuzz_maxalpha_veglm_nc6$cluster,veglm_norm_pam_6_sil,veglm_norm_pam_6_part$ptc)
 
 names(clus_results_veglm_nc6)
 
 # rename the column names in the clustering results data frame to more succinct names
-colnames(clus_results_veglm_nc6) <- c("group", "alliance", "ecoregion","ecosite", "plant_community_code", "plant_community_title","total_shrub_prominence", "M1", "M2", "M3", "M4", "M5", "M6", "N", "thresh80_cluster", "maxalpha_cluster", "pam_cluster", "pam_neighbor", "pam_silwidth")
+colnames(clus_results_veglm_nc6) <- c("group", "alliance", "ecoregion","ecosite", "plant_community_code", "plant_community_title","total_shrub_prominence", "M1", "M2", "M3", "M4", "M5", "M6", "N", "thresh80_cluster", "maxalpha_cluster", "pam_cluster", "pam_neighbor", "pam_silwidth", "Clus_1" ,   " Clus_2",    "Clus_3"   ,  "Clus_4" ,    "Clus_5"  ,   "Clus_6", "Clustering")
 
 names(clus_results_veglm_nc6)
 
 # save the results to a CSV file
-write.csv(clus_results_veglm_nc6,file='tables/clus_results_veglm_nc6.csv',row.names = FALSE)
+write.csv(clus_results_veglm_nc6,file='tables_session2/clus_results_veglm_nc6.csv',row.names = FALSE)
 
 ```
 
@@ -577,7 +557,7 @@ summary(veglm_nc6_indduf, p=0.05, type='long', digits=2, show=0.40, sort=FALSE, 
 ## Partition analysis
 veglm_nc6_part <- partana(env_lm$veglm_nc6,veglm_dist_bc_norm)
 plot(veglm_nc6_part)
-write.csv(veglm_nc6_part$ctc,file='tables/veglm_nc6_part$ctc.csv')
+write.csv(veglm_nc6_part$ctc,file='tables_session2/veglm_nc6_part$ctc.csv')
 
 ## Next evaluate the partition analysis results spreadsheet
 
@@ -674,7 +654,7 @@ identify3d(veglm_mat_nmds_bc_norm$point,labels = row.names(env_lm))
 identify.rgl(row.names(env_lm), veglm_mat_nmds_bc_norm$points, 1,2,3)
 
 
-# Evaluating LM1-APAD with a subset of cluster M1 using sorted tables- Festuca hallii - Hesperostipa_spartea
+# Evaluating LM1-APAD with a subset of cluster M1 using sorted tables_session2- Festuca hallii - Hesperostipa_spartea
 
 vegtab(veglm_mat,row.names(veglm_mat) %in% c("LM1-APAD",  "LM12-APAD" ,"LM8-APAD" ),minval=2,pltord = -veglm_mat$Hesperostipa_spartea) 
 
@@ -688,7 +668,7 @@ table(env_lm$ecoregion[row.names(veglm_mat) %in% c("AP-LM-A","CPA25", "CPA3", "C
 
 ```
 
-Community LM1-APAD (Festuca hallii – Hesperostipa spartea / Hesperostipa curtiseta) was assigned to the noise cluster. The fuzzy membership of LM1-APAD is highest for the noise cluster and next highest for cluster M1. In the ordination we can see that the LM1-APAD is closest to two communities from cluster M1. Evaluating the floristic composition using sorted tables and constancy/cover of LM1-APAD with the subset of communities from M1 we see that **Hesperostipa spartea** and **Festuca hallii** are prominent species compared to the remaining plots in cluster M1 in which **Festuca hallii** is the most prominent species. We also see that LM1-APAD and subset of communities from M1 that are most similar are all from the Aspen Parkland/Assiniboine Delta region of Manitoba while the other M1 communities are from Aspen Parkland in Saskatchewan and Alberta. From this we can conclude that the 3 communities from Manitoba could become their own preliminary alliance.
+Community LM1-APAD (Festuca hallii – Hesperostipa spartea / Hesperostipa curtiseta) was assigned to the noise cluster. The fuzzy membership of LM1-APAD is highest for the noise cluster and next highest for cluster M1. In the ordination we can see that the LM1-APAD is closest to two communities from cluster M1. Evaluating the floristic composition using sorted tables_session2 and constancy/cover of LM1-APAD with the subset of communities from M1 we see that **Hesperostipa spartea** and **Festuca hallii** are prominent species compared to the remaining plots in cluster M1 in which **Festuca hallii** is the most prominent species. We also see that LM1-APAD and subset of communities from M1 that are most similar are all from the Aspen Parkland/Assiniboine Delta region of Manitoba while the other M1 communities are from Aspen Parkland in Saskatchewan and Alberta. From this we can conclude that the 3 communities from Manitoba could become their own preliminary alliance.
               
 M6 and CPA11 example
 ```{r}
@@ -757,7 +737,7 @@ table(env_lm$ecoregion,env_lm$veglm_nc6)
 
 Community FFA27 was classified into cluster M2 but is the only community in that cluster in the Foothill Fescue ecoregion. Looking at the species list for FFA27 we can see that Elymus lanceolatus, Nassella viridula, and Hesperostipa curtiseta are the most prominent and constant grasses, but Festuca campestris is also present in about half of the plots in this community and when present has moderate prominence. Festuca campestris is an important indicator of cluster M3. Based on the ecoregion and indicator species, this community will be reclassifed to cluster M3.
 
-#### Evaluating clusters and communities using shrub prominent
+#### Evaluating clusters and communities using shrub prominence
 ```{r}
 
 # Example using "CPC29", "NFC01","NFC06","CU-LM-A"
@@ -793,7 +773,7 @@ veg_lm %>%
 
 ```
 
-Based on the constancy/cover of cluster M4, we know that this cluster represents shrub-dominanted communities with Festuca hallii on loam ecosites; therefore, the relatively high promience of shrubs in this cluster is to be expected. However, cluster M1, M2, M3, M5 and the noise cluster include communities that are outliers in terms of shrub prominence. By exploring those clusters using sorted tables and evaluating the species composition of the communities with high shrub cover relative to the species composition and diagnostic species in the shrub-dominated cluster M4 we can make decisions about reclassifying shrub dominated communities to aggregate these with cluster M4. 
+Based on the constancy/cover of cluster M4, we know that this cluster represents shrub-dominanted communities with Festuca hallii on loam ecosites; therefore, the relatively high promience of shrubs in this cluster is to be expected. However, cluster M1, M2, M3, M5 and the noise cluster include communities that are outliers in terms of shrub prominence. By exploring those clusters using sorted tables_session2 and evaluating the species composition of the communities with high shrub cover relative to the species composition and diagnostic species in the shrub-dominated cluster M4 we can make decisions about reclassifying shrub dominated communities to aggregate these with cluster M4. 
 
 For instance, in cluster M1, community CPC29 (Symphoricarpos occidentalis/Festuca hallii) has the highest total shrub prominence and the two most prominent shrubs are Symphoricarpos occidentalis and Elaeagnus commutata. We can also see that Elaeagnus_commutata is a strong indicator of cluster M4, therefore we can conclude that CPC29 should be reclassified to cluster M4.  This same review process would be completed for all cluster with communities with high shrub cover.
 
@@ -828,7 +808,7 @@ env_lm <- env_lm %>%
             mutate(alliance_prelim = case_when(
               plant_community_code == "CPA11" ~ "01_hescom_alli", # reassign based on fuzzy membership
               plant_community_code == "CPA6" ~ "03.2_feshal_hescur_alli", # reassign based on fuzzy membership
-              plant_community_code == "FFA27" ~ "04_fescam", # reassign FFA27 based on ecoregion and indicator species
+              plant_community_code == "FFA27" ~ "04_fescam", # reassign FFA27 based on ecoregion, growing degree days, and indicator species
               plant_community_code %in% c("CPC29", "NFC01","NFC06") ~ "03.3_elacom_feshal_alli", # reassign communities with high shrub cover
               plant_community_code %in% c("LM1-APAD","LM12-APAD","LM8-APAD") ~"03.4_feshal_hesspa", # create a new alliance for feshal-hesspa
               .default = alliance_prelim
@@ -865,7 +845,7 @@ summary(veglm_prelim_alli_ind, indvalcomp=TRUE)
 ## Partition analysis
 veglm_prelim_alli_part <- partana(env_lm$alliance_prelim,veglm_dist_bc_norm)
 plot(veglm_prelim_alli_part)
-write.csv(veglm_prelim_alli_part $ctc,file='tables/veglm_prelim_alli_part $ctc.csv')
+write.csv(veglm_prelim_alli_part $ctc,file='tables_session2/veglm_prelim_alli_part $ctc.csv')
 
 ```
 
@@ -945,7 +925,7 @@ dim(veg)
 
 ```{r}
 
-# raw prominence
+# wide format veg data
 veg_mat<-matrify(veg[,c(1,2,3)])
 
 dim(veg_mat)
@@ -1067,7 +1047,7 @@ veg_sppcor_log <-
 veg_sppcor_log <- veg_sppcor_log[order(veg_sppcor_log[,1],decreasing = TRUE),] 
 
 # Save the results to a CSV file for review
-write.csv(veg_sppcor_log, file = "tables/veg_sppcor_log_PearsonCor.csv")
+write.csv(veg_sppcor_log, file = "tables_session2/veg_sppcor_log_PearsonCor.csv")
 
 
 ```
@@ -1135,7 +1115,7 @@ plot(veg_prg_part)
 veg_prg_part_ctc <- as.data.frame(veg_prg_part$ctc)
 names(veg_prg_part_ctc)<-c("G075", "G141", "G273", "G331" ,"G332", "G889", "Gnew_GPSolonetzicGrassland")
 row.names(veg_prg_part_ctc)<-c("G075", "G141", "G273", "G331" ,"G332", "G889", "Gnew_GPSolonetzicGrassland")
-write.csv(veg_prg_part_ctc,file='tables/veg_prg_part$ctc.csv')
+write.csv(veg_prg_part_ctc,file='tables_session2/veg_prg_part$ctc.csv')
 
 ```
 
@@ -1309,7 +1289,7 @@ round(vegmat_nonref_nz.nc$mem, dig=3)
 #### Save the results to a CSV file
 ```{r}
 
-write.csv(defuzzify(vegmat_nonref_nz.nc)$cluster,file='tables/vegmat_nonref_nz_nc$cluster.csv')
+write.csv(defuzzify(vegmat_nonref_nz.nc)$cluster,file='tables_session2/vegmat_nonref_nz_nc$cluster.csv')
 
 ```
 
