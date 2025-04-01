@@ -1,15 +1,15 @@
 # cnvc_elc_workshop_external
 This repository is for managing and collaboration of files for the Canadian National Vegetation Classification Ecological Land Classification workshop.
 
-The CNVC is an ecological classification of natural and semi-natural Canadian vegetation (Faber-Langendoen et al. 2014; Baldwin et al. 2019). The classification is a hierarchical taxonomy, describing vegetation conditions at different levels of generalization from global to local. This project consists of developing training materials that can used to host a workshop to train biologists and ecologists in the art and science of ecological classification using the CNVC system. The hands-on training focuses on developing classification skills through the analysis of sample and/or real-world ecological relevé plot data using multivariate statistical techniques and expert-based classification using manual tabulation or qualitative sorting. Participants will learn to apply CNVC criteria across various levels of the classification hierarchy. 
+The CNVC is an ecological classification of natural and semi-natural Canadian vegetation (Faber-Langendoen et al. 2014; Baldwin et al. 2020). The classification is a hierarchical taxonomy, describing vegetation conditions at different levels of generalization from global to local. This project consists of developing training materials that can used to host a workshop to train biologists and ecologists in the art and science of ecological classification using the CNVC system. The hands-on training focuses on developing classification skills through the analysis of sample and/or real-world ecological relevé plot data using multivariate statistical techniques and expert-based classification using manual tabulation or qualitative sorting. Participants will learn to apply CNVC criteria across various levels of the classification hierarchy. 
 
 The primary goal of this project is to prepare training materials that equip participants with the skills necessary to produce consistent ecological classifications, review and critique existing classifications, and oversee related work conducted by contractors. The training program combines formal classroom instruction with practical, hands-on experience. Participants will have the opportunity to work with sample datasets or they may choose to use their own data, strengthening their ability to advance ecological classification programs and contribute to the CNVC system.
 
-The workshop includes pre-workshop data cleaning session, including two PowerPoint presentations and an RMarkdown file with R code used to prepared the examples shown in the presentations. 
+The workshop includes pre-workshop data cleaning session, including two PowerPoint presentations and an RMarkdown file with R code used to prepared the examples shown in the presentations. There is also a recommended reading list.
 
 The workshop itself include a PowerPoint presentation and three practical sessions. The practical sessions are described below.
 
-The PowerPoint files and HTML versions of the practical sessions are here: https://www.dropbox.com/scl/fo/q7rwgbgq720duudljrhho/AI68cKrhLIRCSp73ba9c-6E?rlkey=ulm26ikmylezhvwsiogtj0ab6&st=uq06yj7t&dl=0
+The PowerPoint files, HTML versions of the practical sessions, and PDFs of relevant literature are here: https://www.dropbox.com/scl/fo/q7rwgbgq720duudljrhho/AI68cKrhLIRCSp73ba9c-6E?rlkey=ulm26ikmylezhvwsiogtj0ab6&st=uq06yj7t&dl=0
 
 ## Practical Session 1
 
@@ -22,4 +22,8 @@ The first part of practical session 2 will run through an example of classifying
 ## Practical Session 3
 
 The purpose of practical session 3 is to provide some examples of preparing data visualizations and data summaries for use in reporting and when preparing for a peer-review of classification results and proposed revisions to the Canadian National Vegetation Classification.
+
+## Literature Cited
+Baldwin, K., K. Chapman, D. Meidinger, P. Uhlig, L. Allen, S. Basquill, D. Faber-Langendoen, N. Flynn, C. Kennedy, W. Mackenzie, M. Major, W (B.) Meades, C. Morneau, and J-P. Saucier. 2019. The Canadian National Vegetation Classification: Principles, Methods and Status. Natural Resources Canada, Canadian Forest Service Information Report GLC-X-23. Sault Ste. Marie, Ontario, CANADA. [also available in French]
+Faber-Langendoen, D., T. Keeler-Wolf, D. Meidinger, D. Tart, B. Hoagland, C. Josse, G. Navarro, S. Ponomarenko, J-P Saucier, A. Weakley, and P. Comer. 2014. “EcoVeg: A New Approach to Vegetation Description and Classification.” Ecological Monographs 84(4): 533-561.
 
