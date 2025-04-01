@@ -9,6 +9,8 @@ The workshop includes pre-workshop data cleaning session, including two PowerPoi
 
 The workshop itself include a PowerPoint presentation and three practical sessions. The practical sessions are described below.
 
+The PowerPoint files and HTML versions of the practical sessions are here: https://www.dropbox.com/scl/fo/q7rwgbgq720duudljrhho/AI68cKrhLIRCSp73ba9c-6E?rlkey=ulm26ikmylezhvwsiogtj0ab6&st=uq06yj7t&dl=0
+
 ## Practical Session 1
 
 The purpose of the first practical session is introduce a number of multivariate statistical analyses that are used in ecosystem classification, including ordination, gradient analysis, cluster analysis, and indicator species analysis. In addition, this session will introduce techniques to quantitatively compare the results of these analyses to select the best output to use to support the ecosystem classification. We will use the Saskatchewan forest ecosystem classification data set with only the forest and woodland plots. In this session, focus on more the statistical analysis techniques that are being introduced and less on the overall data set being used.
