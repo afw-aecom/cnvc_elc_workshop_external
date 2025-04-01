@@ -1,8 +1,10 @@
 ---
 title: "CNVC ELC Practical Session 3"
-author: "Aaron Wells"
+author: "Aaron F. Wells"
 date: "`r Sys.Date()`"
-output: html_document
+output:
+  html_document: default
+  pdf_document: default
 ---
 
 ```{r setup, include=FALSE}
@@ -11,7 +13,7 @@ knitr::opts_chunk$set(echo = TRUE)
 
 ## R Markdown
 
-This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+The purpose of practical session 3 is to provide some examples of preparing data visualizations and data summaries for use in reporting and when preparing for a peer-review of classification results and proposed revisions to the Canadian National Vegetation Classification.
 
 Run this code block first to load the R libraries necessary for this tutorial.
 ```{r echo=TRUE, results='hide', warning = FALSE, message = FALSE}
@@ -37,7 +39,7 @@ Run the code in the next two code blocks to create custom function in this R pro
 
 ## Function 1: pam.select
 
-```{r}
+```{r echo=TRUE, results='hide', warning = FALSE, message = FALSE, eval = FALSE}
 pam.select<-function (dist, k) 
 {
     library(cluster)
@@ -67,7 +69,7 @@ clusnum = clustering number of interest
 covthresh = minimum average cover to display
 const_thresh = minimum constancy to display
 
-```{r}
+```{r echo=TRUE, results='hide', warning = FALSE, message = FALSE, eval = FALSE}
 
 const_abund<-function (veg,clusvec,clusnum,const_thresh=0,cov_thresh=0) 
 {
@@ -218,13 +220,13 @@ veg_struct <- fec_env_subset %>%
 
 
 #### Convert the structure_class column to a factor and specify the order of levels, the levels will display from top (first listed) to bottom (last listed) in the stacked bar charts
-```{r}
+```{r echo=TRUE, results='hide', warning = FALSE, message = FALSE, eval = FALSE}
 veg_struct$structure_class <- factor(veg_struct$structure_class, levels = c("needleleaf_overstory_tree","needleleaf_sapling","needleleaf_seedling","broadleaf_overstory_tree","broadleaf_sapling","broadleaf_seedling","shrub_cover","forbs_and_graminoids","bryophytes_and_lichens","woody_debris","leaf_litter","needle_litter","rock","soil","water"))
 
 ```
 
 #### Select colors that will represent the structure classes
-```{r}
+```{r echo=TRUE, results='hide', warning = FALSE, message = FALSE, eval = FALSE}
 # Use the color brewer function to generate some color palettes to use for selecting colors for the figure. 
 brewer.pal(6,"Greens") 
 
@@ -237,7 +239,7 @@ strucolrs<-c("#006D2C","#31A354","#74C476","#A1D99B","#C7E9C0","#EDF8E9","#FC927
 ```
 
 #### Create the stacked barchart figure
-```{r}
+```{r echo=TRUE, results='hide', warning = FALSE, message = FALSE, eval = FALSE}
 height <- 4
 width <- 6
 resize <- 1.5
@@ -271,7 +273,7 @@ dev.off()
 
 ### Read in the praire data
 
-```{r}
+```{r echo=TRUE, results='hide', warning = FALSE, message = FALSE, eval = FALSE}
     veg <- read.csv("prairie_veg.csv",sep = ",")
                                         
 dim(veg)
@@ -280,7 +282,7 @@ dim(veg)
 
 ### Create the long format vegetation dataframe
 
-```{r}
+```{r echo=TRUE, results='hide', warning = FALSE, message = FALSE, eval = FALSE}
 
 veg_mat<-matrify(veg[,c(1,2,3)])
 
@@ -289,7 +291,7 @@ dim(veg_mat)
 
 ### Environment and Plant Community data GRASSLAND subset
 
-```{r}
+```{r echo=TRUE, results='hide', warning = FALSE, message = FALSE, eval = FALSE}
 
 env <- read.csv("prairie_env.csv", sep = ",")
 
@@ -307,7 +309,7 @@ identical(row.names(env),row.names(veg_mat))
 ```
 
 ### Create the Ordination
-```{r}
+```{r echo=TRUE, results='hide', warning = FALSE, message = FALSE, eval = FALSE}
 
 # Normalized abundance transformation
 veg_norm <-         
@@ -322,7 +324,8 @@ veg_nmds_bc_norm_dsv <- nmds(veg_dist_bc_norm,k=3)
 ```
 
 ### Create a multi-panel ordination figure and export to png
-```{r}
+I recommend building these out by plotting first panel only (adding elements within each panel incrementally as well), then incrementally add each panel, and the finally the text annotations at the bottom of the figure.
+```{r echo=TRUE, results='hide', warning = FALSE, message = FALSE, eval = FALSE}
 
 # create a png file
 png("Fig_3_prairie_grassland_groups_nmds.png", height = 7.5,width = 7.5,units = "in", res = 600)
@@ -353,7 +356,8 @@ legend(.40,1.0,c("G075","G141","G273","G331","G332","G889","Solonetzic"), pch=c(
 # add an annotation (panel label)
 text(-1.0,0.90, "A",cex = 0.9,pos=4,col="black") #panel label
 
-#dev.off()
+dev.off()
+# Run the code through here first to plot the first panel, then comment out the above dev.off() and uncomment the dev.off() at the bottom of the code for panel 2, and repeat for the other panels and annotations at the bottom of the figure. Progressively add panels to build out the 4 panel figure with all text annontations.
 
 # Panel 2 group with Climate Moisture Index Generalized Additive Model (GAM) overlay
 
@@ -461,13 +465,13 @@ legend("bottomleft",c("* One community was assigned to the Limy ecosite and is i
 # Add an title
 mtext("Canadian Prairies Grassland & Shrubland Groups", side=3, line=-2, outer=TRUE, cex=1.5, font=2)
 
-dev.off()
+#dev.off()
 
 ```
 
 ### Environmental Data Summaries
 
-```{r}
+```{r echo=TRUE, results='hide', warning = FALSE, message = FALSE, eval = FALSE}
 x11()
 fec_veg_mat_subset_abuocc <- abuocc(fec_veg_mat_subset,minabu=0,panel='all')
 
@@ -504,7 +508,7 @@ write.csv(ecoenvsum_long,"tables/ecosite_environment_summary_table.csv")
 
 ### Cluster Analysis Results
 
-```{r}
+```{r echo=TRUE, results='hide', warning = FALSE, message = FALSE, eval = FALSE}
 
 # Normalized abundance transformation
 fec_veg_mat_norm <-         
@@ -531,7 +535,7 @@ write.csv(fec_veg_mat_norm_pam_4$silinfo$widths,"tables/fec_veg_mat_norm_pam_4$s
 
 ### Indicator species analysis results
 
-```{r}
+```{r echo=TRUE, results='hide', warning = FALSE, message = FALSE, eval = FALSE}
 # Multiple pattern analysis
 
 fec_veg_mat_norm_pam_4_ind<- multipatt(fec_veg_mat_subset,fec_veg_mat_norm_pam_4$clustering, 
@@ -561,7 +565,7 @@ write.csv(fec_veg_mat_norm_pam_4_ind$A,"tables/fec_veg_mat_norm_pam_4_ind_Specif
 
 
 # Partition Analysis Results
-```{r}
+```{r echo=TRUE, results='hide', warning = FALSE, message = FALSE, eval = FALSE}
 # Partition Analysis Results
 
 fec_veg_pam4_part <- partana(fec_veg_mat_norm_pam_4$clustering,fec_veg_mat_norm_dist_bc)
@@ -587,7 +591,7 @@ write.csv(fec_veg_pam4_part$ptc,"tables/fec_veg_pam4_part$ptc.csv")
 
 ### Constancy/Cover tables
 
-```{r}
+```{r echo=TRUE, results='hide', warning = FALSE, message = FALSE, eval = FALSE}
 
 # Select the subset of ecosites we've been using as an example from the long format vegetation dataframe
 fec_veg_subset <- fec_veg[fec_veg$plotnumber %in% row.names(fec_env_subset),]
