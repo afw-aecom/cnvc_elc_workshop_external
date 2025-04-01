@@ -1,7 +1,7 @@
 # cnvc_elc_workshop_external
-Aaron F. Wells
-aaron{dot}wells{@}aecom{dot}com
-AECOM Technical Services
+* Aaron F. Wells
+* aaron{dot}wells{@}aecom{dot}com
+* AECOM Technical Services
 
 ## Introduction
 This repository is for managing and collaboration of files for the Canadian National Vegetation Classification (CNVC) Ecological Land Classification workshop.
