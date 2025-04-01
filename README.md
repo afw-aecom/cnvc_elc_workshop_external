@@ -1,6 +1,6 @@
 # cnvc_elc_workshop_external
 * Aaron F. Wells
-* aaron{dot}wells{@}aecom{dot}com
+* aaron{dot}wells{at}aecom{dot}com
 * AECOM Technical Services
 
 ## Introduction
