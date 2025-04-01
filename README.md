@@ -4,7 +4,7 @@
 * AECOM Technical Services
 
 ## Introduction
-This repository is for managing and collaboration of files for the Canadian National Vegetation Classification (CNVC) Ecological Land Classification workshop.
+This repository is for managing and collaboration of files for the Canadian National Vegetation Classification (CNVC) Ecological Land Classification workshop. Funding for preparing the workshop materials was provided by [NatureServe Canada](https://www.natureserve.org/canada).
 
 The CNVC is an ecological classification of natural and semi-natural Canadian vegetation (Faber-Langendoen et al. 2014; Baldwin et al. 2019). The classification is a hierarchical taxonomy, describing vegetation conditions at different levels of generalization from global to local. This repository includes training materials that can used to host a workshop to train biologists and ecologists in the art and science of ecological classification using the CNVC system. The hands-on training focuses on developing classification skills through the analysis of sample and/or real-world ecological relevé plot data using multivariate statistical techniques and expert-based classification using manual tabulation or qualitative sorting. Participants will learn to apply CNVC criteria across various levels of the classification hierarchy. 
 
